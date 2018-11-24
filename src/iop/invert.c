@@ -36,6 +36,7 @@
 #include "gui/accelerators.h"
 #include "gui/gtk.h"
 #include "iop/iop_api.h"
+#include "common/iop_group.h"
 
 DT_MODULE_INTROSPECTION(2, dt_iop_invert_params_t)
 
@@ -106,6 +107,7 @@ int legacy_params(dt_iop_module_t *self, const void *const old_params, const int
   return 1;
 }
 
+
 const char *name()
 {
   return _("invert");
@@ -113,7 +115,7 @@ const char *name()
 
 int groups()
 {
-  return IOP_GROUP_BASIC;
+  return dt_iop_get_group("invert", IOP_GROUP_BASIC);
 }
 
 int flags()
@@ -504,8 +506,13 @@ void reload_defaults(dt_iop_module_t *self)
   memcpy(self->default_params, &tmp, sizeof(dt_iop_invert_params_t));
 
   self->default_enabled = 0;
+  self->hide_enable_button = 0;
 
-  if(self->dev && self->dev->image_storage.flags & DT_IMAGE_4BAYER && self->gui_data)
+  if(!self->dev) return;
+
+  if(dt_image_is_monochrome(&self->dev->image_storage))
+    self->hide_enable_button = 1;
+  else if(self->dev->image_storage.flags & DT_IMAGE_4BAYER && self->gui_data)
   {
     dt_iop_invert_gui_data_t *g = self->gui_data;
 
@@ -537,7 +544,7 @@ void init(dt_iop_module_t *module)
   module->default_enabled = 0;
   module->params_size = sizeof(dt_iop_invert_params_t);
   module->gui_data = NULL;
-  module->priority = 29; // module order created by iop_dependencies.py, do not edit!
+  module->priority = 28; // module order created by iop_dependencies.py, do not edit!
 }
 
 void cleanup(dt_iop_module_t *module)
@@ -568,6 +575,8 @@ void commit_params(struct dt_iop_module_t *self, dt_iop_params_t *params, dt_dev
 
   // 4Bayer images not implemented in OpenCL yet
   if(self->dev->image_storage.flags & DT_IMAGE_4BAYER) piece->process_cl_ready = 0;
+
+  if(self->hide_enable_button) piece->enabled = 0;
 }
 
 void init_pipe(struct dt_iop_module_t *self, dt_dev_pixelpipe_t *pipe, dt_dev_pixelpipe_iop_t *piece)
@@ -582,16 +591,33 @@ void cleanup_pipe(struct dt_iop_module_t *self, dt_dev_pixelpipe_t *pipe, dt_dev
   piece->data = NULL;
 }
 
+void gui_reset(struct dt_iop_module_t *self)
+{
+  dt_iop_invert_gui_data_t *g = (dt_iop_invert_gui_data_t *)self->gui_data;
+  self->request_color_pick = DT_REQUEST_COLORPICK_OFF;
+  gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(g->picker), 0);
+}
+
 void gui_update(dt_iop_module_t *self)
 {
   self->request_color_pick = DT_REQUEST_COLORPICK_OFF;
 
   dt_iop_invert_gui_data_t *g = (dt_iop_invert_gui_data_t *)self->gui_data;
 
-  gtk_widget_set_visible(GTK_WIDGET(g->pickerbuttons), TRUE);
-  dtgtk_reset_label_set_text(g->label, _("color of film material"));
+  if(!dt_image_is_monochrome(&self->dev->image_storage))
+  {
+    gtk_widget_set_visible(GTK_WIDGET(g->pickerbuttons), TRUE);
+    dtgtk_reset_label_set_text(g->label, _("color of film material"));
+    gui_update_from_coeffs(self);
 
-  gui_update_from_coeffs(self);
+    if (self->request_color_pick == DT_REQUEST_COLORPICK_OFF)
+      gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(g->picker), 0);
+  }
+  else
+  {
+    gtk_widget_set_visible(GTK_WIDGET(g->pickerbuttons), FALSE);
+    dtgtk_reset_label_set_text(g->label, _("module disabled for monochrome image"));
+  }
 }
 
 void gui_init(dt_iop_module_t *self)
@@ -601,6 +627,7 @@ void gui_init(dt_iop_module_t *self)
   dt_iop_invert_params_t *p = (dt_iop_invert_params_t *)self->params;
 
   self->widget = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 5);
+  dt_gui_add_help_link(self->widget, dt_get_help_url(self->op));
 
   g->label = DTGTK_RESET_LABEL(dtgtk_reset_label_new("", self, &p->color, 4 * sizeof(float)));
   gtk_box_pack_start(GTK_BOX(self->widget), GTK_WIDGET(g->label), TRUE, TRUE, 0);
@@ -616,7 +643,7 @@ void gui_init(dt_iop_module_t *self)
   g_signal_connect(G_OBJECT(g->colorpicker), "color-set", G_CALLBACK(colorpicker_callback), self);
   gtk_box_pack_start(GTK_BOX(g->pickerbuttons), GTK_WIDGET(g->colorpicker), TRUE, TRUE, 0);
 
-  g->picker = dtgtk_togglebutton_new(dtgtk_cairo_paint_colorpicker, CPF_STYLE_FLAT);
+  g->picker = dtgtk_togglebutton_new(dtgtk_cairo_paint_colorpicker, CPF_STYLE_FLAT, NULL);
   gtk_widget_set_tooltip_text(g->picker, _("pick color of film material from image"));
   gtk_widget_set_size_request(g->picker, DT_PIXEL_APPLY_DPI(24), DT_PIXEL_APPLY_DPI(24));
   g_signal_connect(G_OBJECT(g->picker), "toggled", G_CALLBACK(request_pick_toggled), self);

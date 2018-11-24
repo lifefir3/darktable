@@ -29,6 +29,7 @@
 #include "gui/accelerators.h"
 #include "gui/gtk.h"
 #include "iop/iop_api.h"
+#include "common/iop_group.h"
 #include <assert.h>
 #include <cairo.h>
 #include <complex.h>
@@ -51,6 +52,8 @@ const int   INTERPOLATION_POINTS = 100; // when interpolating bezier
 const float STAMP_RELOCATION = 0.1;     // how many radii to move stamp forward when following a path
 
 #define CONF_RADIUS "plugins/darkroom/liquify/radius"
+#define CONF_ANGLE "plugins/darkroom/liquify/angle"
+#define CONF_STRENGTH "plugins/darkroom/liquify/strength"
 
 // enum of layers. sorted back to front.
 
@@ -175,6 +178,7 @@ typedef enum {
   DT_LIQUIFY_STATUS_NONE = 0,
   DT_LIQUIFY_STATUS_NEW = 1,
   DT_LIQUIFY_STATUS_INTERPOLATED = 2,
+  DT_LIQUIFY_STATUS_PREVIEW = 4,
   DT_LIQUIFY_STATUS_LAST
 } dt_liquify_status_enum_t;
 
@@ -260,6 +264,7 @@ typedef struct {
 
 } dt_iop_liquify_gui_data_t;
 
+
 // this returns a translatable name
 const char *name ()
 {
@@ -268,7 +273,7 @@ const char *name ()
 
 int groups ()
 {
-  return IOP_GROUP_CORRECT;
+return dt_iop_get_group("liquify", IOP_GROUP_CORRECT);
 }
 
 int flags ()
@@ -733,7 +738,7 @@ static const float complex point_at_arc_length (const float complex points[],
   warp depending from its distance from a central point.
 
   Boundary conditions: f(0) must be 1 and f(@a distance) must be 0.
-  f'(0) and f'(@a distance) must both be 0 or we'll get artefacts on
+  f'(0) and f'(@a distance) must both be 0 or we'll get artifacts on
   the picture.
 
   Implementation: a bezier curve with p0 = 0, 1 and p3 = 1, 0. p1 is
@@ -1534,7 +1539,7 @@ void init (dt_iop_module_t *module)
 {
   // module is disabled by default
   module->default_enabled = 0;
-  module->priority = 220; // module order created by iop_dependencies.py, do not edit!
+  module->priority = 228; // module order created by iop_dependencies.py, do not edit!
   module->params_size = sizeof(dt_iop_liquify_params_t);
   module->gui_data = NULL;
 
@@ -2517,7 +2522,7 @@ static float get_zoom_scale (dt_develop_t *develop)
 {
   const dt_dev_zoom_t zoom = dt_control_get_dev_zoom ();
   const int closeup = dt_control_get_dev_closeup ();
-  return dt_dev_get_zoom_scale (develop, zoom, closeup ? 2 : 1, 1);
+  return dt_dev_get_zoom_scale (develop, zoom, 1<<closeup, 1);
 }
 
 void gui_post_expose (struct dt_iop_module_t *module,
@@ -2616,15 +2621,15 @@ static void get_point_scale(struct dt_iop_module_t *module, float x, float y, fl
   dt_dev_get_pointer_zoom_pos(darktable.develop, x, y, &pzx, &pzy);
   pzx += 0.5f;
   pzy += 0.5f;
-  float wd = darktable.develop->preview_pipe->backbuf_width;
-  float ht = darktable.develop->preview_pipe->backbuf_height;
+  const float wd = darktable.develop->preview_pipe->backbuf_width;
+  const float ht = darktable.develop->preview_pipe->backbuf_height;
   float pts[2] = { pzx * wd, pzy * ht };
   dt_dev_distort_backtransform_plus(darktable.develop, darktable.develop->preview_pipe,
                                     module->priority + 1, 9999999, pts, 1);
   dt_dev_distort_backtransform_plus(darktable.develop, darktable.develop->preview_pipe,
                                     0, module->priority - 1, pts, 1);
-  float nx = pts[0] / darktable.develop->preview_pipe->iwidth;
-  float ny = pts[1] / darktable.develop->preview_pipe->iheight;
+  const float nx = pts[0] / darktable.develop->preview_pipe->iwidth;
+  const float ny = pts[1] / darktable.develop->preview_pipe->iheight;
 
   *scale = darktable.develop->preview_pipe->iscale / get_zoom_scale(module->dev);
   *pt = (nx * darktable.develop->pipe->iwidth) +  (ny * darktable.develop->pipe->iheight) * I;
@@ -2767,6 +2772,8 @@ int mouse_moved (struct dt_iop_module_t *module,
 
     case DT_LIQUIFY_LAYER_STRENGTHPOINT:
       d->warp.strength = pt;
+      dt_conf_set_float(CONF_STRENGTH, cabs(d->warp.strength - d->warp.point));
+      dt_conf_set_float(CONF_ANGLE, carg(d->warp.strength - d->warp.point));
       break;
 
     case DT_LIQUIFY_LAYER_HARDNESSPOINT1:
@@ -2789,6 +2796,81 @@ done:
     sync_pipe (module, handled == 2);
   }
   return handled;
+}
+
+/*
+  add support for changing the radius and the strength vector for the temp node
+ */
+int scrolled(struct dt_iop_module_t *module, double x, double y, int up, uint32_t state)
+{
+  const dt_iop_liquify_gui_data_t *g = (dt_iop_liquify_gui_data_t *) module->gui_data;
+
+  // add an option to allow skip mouse events while editing masks
+  if(darktable.develop->darkroom_skip_mouse_events) return 0;
+
+  if (g->temp)
+  {
+    dt_liquify_warp_t *warp = &g->temp->warp;
+    const float complex strength_v = warp->strength - warp->point;
+
+    if (state == 0)
+    {
+      //  change size
+      float radius = dt_conf_get_float(CONF_RADIUS);
+      const float phi = carg(strength_v);
+      float r = cabs(strength_v);
+      float factor = 1.0f;
+
+      if(up && cabs(warp->radius - warp->point) > 10.0f)
+        factor *= 0.97f;
+      else if(!up)
+        factor *= 1.0f / 0.97f;
+
+      r *= factor;
+      radius *= factor;
+
+      warp->radius = warp->point + (radius * factor);
+      warp->strength = warp->point + r * cexp (phi * I);
+
+      dt_conf_set_float(CONF_RADIUS, radius);
+      dt_conf_set_float(CONF_STRENGTH, r);
+      return 1;
+    }
+    else if (state & GDK_CONTROL_MASK)
+    {
+      //  change the strength direction
+      float phi = carg(strength_v);
+      const float r = cabs(strength_v);
+
+      if(up)
+        phi += M_PI / 16.0f;
+      else
+        phi -= M_PI / 16.0f;
+
+      warp->strength = warp->point + r * cexp (phi * I);
+      dt_conf_set_float(CONF_STRENGTH, r);
+      dt_conf_set_float(CONF_ANGLE, phi);
+      return 1;
+    }
+    else if (state & GDK_SHIFT_MASK)
+    {
+      //  change the strength
+      const float phi = carg(strength_v);
+      float r = cabs(strength_v);
+
+      if(up)
+        r *= 0.97f;
+      else
+        r *= 1.0f / 0.97f;
+
+      warp->strength = warp->point + r * cexp (phi * I);
+      dt_conf_set_float(CONF_STRENGTH, r);
+      dt_conf_set_float(CONF_ANGLE, phi);
+      return 1;
+    }
+  }
+
+  return 0;
 }
 
 int button_pressed (struct dt_iop_module_t *module,
@@ -2827,13 +2909,9 @@ int button_pressed (struct dt_iop_module_t *module,
     // dangling pointers
     end_drag (g);
 
-    // start a new path
-    g->temp = alloc_move_to (module, pt);
     if (!g->temp) goto done;
-    g->temp->warp.radius   = pt +
-      (dt_conf_key_exists(CONF_RADIUS) ? dt_conf_get_float(CONF_RADIUS) : GET_UI_WIDTH (DEFAULT_RADIUS));
-    g->temp->warp.strength = pt + GET_UI_WIDTH (DEFAULT_STRENGTH);
     g->status |= DT_LIQUIFY_STATUS_NEW;
+    g->status &= ~DT_LIQUIFY_STATUS_PREVIEW;
 
     start_drag (g, DT_LIQUIFY_LAYER_STRENGTHPOINT, g->temp);
     g->last_hit = NOWHERE;
@@ -2858,12 +2936,7 @@ int button_pressed (struct dt_iop_module_t *module,
       }
       else
       {
-        // start a new path
-        g->temp = alloc_move_to (module, pt);
         if (!g->temp) goto done;
-        g->temp->warp.radius   = pt +
-          (dt_conf_key_exists(CONF_RADIUS) ? dt_conf_get_float(CONF_RADIUS) : GET_UI_WIDTH (DEFAULT_RADIUS));
-        g->temp->warp.strength = pt + GET_UI_WIDTH (DEFAULT_STRENGTH);
       }
     }
     g->last_hit = NOWHERE;
@@ -2872,6 +2945,7 @@ int button_pressed (struct dt_iop_module_t *module,
       start_drag (g, DT_LIQUIFY_LAYER_CTRLPOINT1, g->temp);
     }
     g->status |= DT_LIQUIFY_STATUS_NEW;
+    g->status &= ~DT_LIQUIFY_STATUS_PREVIEW;
     handled = 1;
     goto done;
   }
@@ -2934,30 +3008,30 @@ int button_released (struct dt_iop_module_t *module,
     end_drag (g);
     if (gtk_toggle_button_get_active (g->btn_point_tool))
     {
-      // user released without dragging, set a default strength vector
-      if (!dragged)
-      {
-        g->temp->warp.strength = pt + GET_UI_WIDTH (DEFAULT_STRENGTH);
-      }
       g->temp = NULL; // a point is done
       gtk_toggle_button_set_active (g->btn_node_tool, 1);
+      handled = dragged ? 2 : 1;
     }
-    if (gtk_toggle_button_get_active (g->btn_line_tool))
+    else if (gtk_toggle_button_get_active (g->btn_line_tool))
     {
       const int prev_index = g->node_index;
+      const float complex strength = (g->temp->warp.strength - g->temp->warp.point);
+      const float radius = cabs(g->temp->warp.radius - g->temp->warp.point);
       g->temp = alloc_line_to (module, pt);
       if (!g->temp) goto done;
-      g->temp->warp.radius   = pt +
-        (dt_conf_key_exists(CONF_RADIUS) ? dt_conf_get_float(CONF_RADIUS) : GET_UI_WIDTH (DEFAULT_RADIUS));
-      g->temp->warp.strength = pt + GET_UI_WIDTH (DEFAULT_STRENGTH);
+      g->temp->warp.radius   = pt + radius;
+      g->temp->warp.strength = pt + strength;
       // links
       g->temp->header.prev = prev_index;
       node_get(&g->params, prev_index)->header.next = g->node_index;
       start_drag (g, DT_LIQUIFY_LAYER_CENTERPOINT, g->temp);
+      handled = 1;
     }
-    if (gtk_toggle_button_get_active (g->btn_curve_tool))
+    else if (gtk_toggle_button_get_active (g->btn_curve_tool))
     {
       const int prev_index = g->node_index;
+      const float complex strength = (g->temp->warp.strength - g->temp->warp.point);
+      const float radius = cabs(g->temp->warp.radius - g->temp->warp.point);
       g->temp = alloc_curve_to (module, pt);
       if (!g->temp) goto done;
       // user dragged, make it a symmetrical node
@@ -2965,16 +3039,15 @@ int button_released (struct dt_iop_module_t *module,
       {
         g->temp->header.node_type = DT_LIQUIFY_NODE_TYPE_SYMMETRICAL;
       }
-      g->temp->warp.radius = pt +
-        (dt_conf_key_exists(CONF_RADIUS) ? dt_conf_get_float(CONF_RADIUS) : GET_UI_WIDTH (DEFAULT_RADIUS));
-      g->temp->warp.strength = pt + GET_UI_WIDTH (DEFAULT_STRENGTH);
+      g->temp->warp.radius = pt + radius;
+      g->temp->warp.strength = pt + strength;
       // links
       g->temp->header.prev = prev_index;
       node_get(&g->params, prev_index)->header.next = g->node_index;
       start_drag (g, DT_LIQUIFY_LAYER_CENTERPOINT, g->temp);
+      handled = 1;
     }
     g->status &= ~DT_LIQUIFY_STATUS_NEW;
-    handled = 1;
     goto done;
   }
 
@@ -2996,6 +3069,7 @@ int button_released (struct dt_iop_module_t *module,
     {
       node_delete (&g->params, g->temp);
       g->temp = NULL;
+      g->status &= ~DT_LIQUIFY_STATUS_PREVIEW;
       gtk_toggle_button_set_active (g->btn_node_tool, 1);
       handled = 2;
       goto done;
@@ -3169,23 +3243,33 @@ done:
   return handled;
 }
 
-static void _liquify_cairo_paint_point_tool
-(cairo_t *cr, const gint x, const gint y, const gint w, const gint h, const gint flags);
+static void _liquify_cairo_paint_point_tool(cairo_t *cr, const gint x, const gint y, const gint w, const gint h,
+                                            const gint flags, void *data);
 
-static void _liquify_cairo_paint_line_tool
-(cairo_t *cr, const gint x, const gint y, const gint w, const gint h, const gint flags);
+static void _liquify_cairo_paint_line_tool(cairo_t *cr, const gint x, const gint y, const gint w, const gint h,
+                                           const gint flags, void *data);
 
-static void _liquify_cairo_paint_curve_tool
-(cairo_t *cr, const gint x, const gint y, const gint w, const gint h, const gint flags);
+static void _liquify_cairo_paint_curve_tool(cairo_t *cr, const gint x, const gint y, const gint w, const gint h,
+                                            const gint flags, void *data);
 
-static void _liquify_cairo_paint_node_tool
-(cairo_t *cr, const gint x, const gint y, const gint w, const gint h, const gint flags);
+static void _liquify_cairo_paint_node_tool(cairo_t *cr, const gint x, const gint y, const gint w, const gint h,
+                                           const gint flags, void *data);
+
 
 // we need this only because darktable has no radiobutton support
 static void btn_make_radio_callback (GtkToggleButton *btn, dt_iop_module_t *module)
 {
   dt_iop_liquify_gui_data_t *g = (dt_iop_liquify_gui_data_t *) module->gui_data;
   dt_control_hinter_message (darktable.control, "");
+
+  if (g->status & DT_LIQUIFY_STATUS_PREVIEW)
+  {
+    node_delete (&g->params, g->temp);
+    g->temp = NULL;
+    g->status &= ~DT_LIQUIFY_STATUS_PREVIEW;
+    gtk_toggle_button_set_active (g->btn_node_tool, 1);
+    goto done;
+  }
 
   // if currently dragging, does nothing
   if (is_dragging(g))
@@ -3201,14 +3285,54 @@ static void btn_make_radio_callback (GtkToggleButton *btn, dt_iop_module_t *modu
     gtk_toggle_button_set_active (g->btn_curve_tool, btn == g->btn_curve_tool);
     gtk_toggle_button_set_active (g->btn_node_tool,  btn == g->btn_node_tool);
     if (btn == g->btn_point_tool)
-      dt_control_hinter_message (darktable.control, _("click and drag to add point"));
+      dt_control_hinter_message
+        (darktable.control, _("click and drag to add point\nscrool to change size\n"
+                              "shift-scroll to change strength - ctrl-scroll to change direction"));
     if (btn == g->btn_line_tool)
-      dt_control_hinter_message (darktable.control, _("click to add line"));
+      dt_control_hinter_message
+        (darktable.control, _("click to add line\nscrool to change size\n"
+                              "shift-scroll to change strength - ctrl-scroll to change direction"));
     if (btn == g->btn_curve_tool)
-      dt_control_hinter_message (darktable.control, _("click to add curve"));
+      dt_control_hinter_message
+        (darktable.control, _("click to add curve\nscrool to change size\n"
+                              "shift-scroll to change strength - ctrl-scroll to change direction"));
     if (btn == g->btn_node_tool)
       dt_control_hinter_message (darktable.control, _("click to edit nodes"));
+
+    //  start the preview mode to show the shape that will be created
+
+    if (btn == g->btn_point_tool || btn == g->btn_line_tool || btn == g->btn_curve_tool)
+    {
+      float complex pt;
+      float scale;
+
+      //  create initial shape at the center
+      get_point_scale(module, .5f * darktable.develop->width, .5f * darktable.develop->height, &pt, &scale);
+
+      //  start a new path
+      g->temp = alloc_move_to (module, pt);
+
+      //  start with current saved size/strength
+
+      const float radius =
+        dt_conf_key_exists(CONF_RADIUS) ? dt_conf_get_float(CONF_RADIUS) : GET_UI_WIDTH (DEFAULT_RADIUS);
+      const float r =
+        dt_conf_key_exists(CONF_STRENGTH) ? dt_conf_get_float(CONF_STRENGTH) : GET_UI_WIDTH (DEFAULT_STRENGTH);
+      const float phi =
+        dt_conf_key_exists(CONF_ANGLE) ? dt_conf_get_float(CONF_ANGLE) : 0;
+
+      g->temp->warp.radius   = pt + radius;
+      g->temp->warp.strength = pt + r * cexp (phi * I);
+
+      g->status |= DT_LIQUIFY_STATUS_PREVIEW;
+      g->status |= DT_LIQUIFY_STATUS_NEW;
+
+      start_drag (g, DT_LIQUIFY_LAYER_CENTERPOINT, g->temp);
+      g->last_hit = NOWHERE;
+    }
   }
+
+done:
   sync_pipe (module, FALSE);
   dt_iop_request_focus(module);
 }
@@ -3242,6 +3366,7 @@ void gui_init (dt_iop_module_t *module)
   g->node_index = 0;
 
   module->widget = gtk_box_new (GTK_ORIENTATION_VERTICAL, 5);
+  dt_gui_add_help_link(module->widget, dt_get_help_url(module->op));
 
   GtkWidget *hbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 5);
   gtk_widget_set_tooltip_text(hbox, _("use a tool to add warps.\nright-click to remove a warp."));
@@ -3251,7 +3376,7 @@ void gui_init (dt_iop_module_t *module)
   gtk_box_pack_start (GTK_BOX(hbox), GTK_WIDGET(g->label), FALSE, TRUE, 0);
 
   g->btn_node_tool = GTK_TOGGLE_BUTTON(dtgtk_togglebutton_new(_liquify_cairo_paint_node_tool,
-                                                              CPF_STYLE_FLAT|CPF_DO_NOT_USE_BORDER));
+                                                              CPF_STYLE_FLAT|CPF_DO_NOT_USE_BORDER, NULL));
   g_signal_connect(G_OBJECT(g->btn_node_tool), "toggled", G_CALLBACK (btn_make_radio_callback), module);
   gtk_widget_set_tooltip_text(GTK_WIDGET(g->btn_node_tool), _("node tool: edit, add and delete nodes"));
   gtk_toggle_button_set_active (g->btn_node_tool, 0);
@@ -3259,7 +3384,7 @@ void gui_init (dt_iop_module_t *module)
   gtk_box_pack_end(GTK_BOX(hbox), GTK_WIDGET(g->btn_node_tool), FALSE, FALSE, 0);
 
   g->btn_curve_tool = GTK_TOGGLE_BUTTON(dtgtk_togglebutton_new(_liquify_cairo_paint_curve_tool,
-                                                               CPF_STYLE_FLAT|CPF_DO_NOT_USE_BORDER));
+                                                               CPF_STYLE_FLAT|CPF_DO_NOT_USE_BORDER, NULL));
   g_signal_connect (G_OBJECT (g->btn_curve_tool), "toggled", G_CALLBACK (btn_make_radio_callback), module);
   gtk_widget_set_tooltip_text(GTK_WIDGET(g->btn_curve_tool), _("curve tool: draw curves"));
   gtk_toggle_button_set_active (g->btn_curve_tool, 0);
@@ -3267,7 +3392,7 @@ void gui_init (dt_iop_module_t *module)
   gtk_box_pack_end (GTK_BOX(hbox), GTK_WIDGET(g->btn_curve_tool), FALSE, FALSE, 0);
 
   g->btn_line_tool = GTK_TOGGLE_BUTTON(dtgtk_togglebutton_new(_liquify_cairo_paint_line_tool,
-                                                              CPF_STYLE_FLAT|CPF_DO_NOT_USE_BORDER));
+                                                              CPF_STYLE_FLAT|CPF_DO_NOT_USE_BORDER, NULL));
   g_signal_connect (G_OBJECT (g->btn_line_tool), "toggled", G_CALLBACK (btn_make_radio_callback), module);
   gtk_widget_set_tooltip_text(GTK_WIDGET(g->btn_line_tool), _("line tool: draw lines"));
   gtk_toggle_button_set_active (g->btn_line_tool, 0);
@@ -3275,7 +3400,7 @@ void gui_init (dt_iop_module_t *module)
   gtk_box_pack_end (GTK_BOX(hbox), GTK_WIDGET(g->btn_line_tool), FALSE, FALSE, 0);
 
   g->btn_point_tool = GTK_TOGGLE_BUTTON(dtgtk_togglebutton_new(_liquify_cairo_paint_point_tool,
-                                                               CPF_STYLE_FLAT|CPF_DO_NOT_USE_BORDER));
+                                                               CPF_STYLE_FLAT|CPF_DO_NOT_USE_BORDER, NULL));
   g_signal_connect (G_OBJECT (g->btn_point_tool), "toggled", G_CALLBACK (btn_make_radio_callback), module);
   gtk_widget_set_tooltip_text(GTK_WIDGET(g->btn_point_tool), _("point tool: draw points"));
   gtk_toggle_button_set_active (g->btn_point_tool, 0);
@@ -3346,8 +3471,8 @@ void connect_key_accels (dt_iop_module_t *module)
   cairo_paint_with_alpha (cr, flags & CPF_ACTIVE ? 1.0 : 0.5);  \
   cairo_restore (cr);
 
-static void _liquify_cairo_paint_point_tool (cairo_t *cr,
-                                             const gint x, const gint y, const gint w, const gint h, const gint flags)
+static void _liquify_cairo_paint_point_tool (cairo_t *cr, const gint x, const gint y, const gint w, const gint h,
+                                             const gint flags, void *data)
 {
   PREAMBLE;
   cairo_new_sub_path (cr);
@@ -3356,8 +3481,8 @@ static void _liquify_cairo_paint_point_tool (cairo_t *cr,
   POSTAMBLE;
 }
 
-static void _liquify_cairo_paint_line_tool (cairo_t *cr,
-                                            const gint x, const gint y, const gint w, const gint h, const gint flags)
+static void _liquify_cairo_paint_line_tool (cairo_t *cr, const gint x, const gint y, const gint w, const gint h,
+                                            const gint flags, void *data)
 {
   PREAMBLE;
   cairo_move_to (cr, 0.1, 0.9);
@@ -3366,8 +3491,8 @@ static void _liquify_cairo_paint_line_tool (cairo_t *cr,
   POSTAMBLE;
 }
 
-static void _liquify_cairo_paint_curve_tool (cairo_t *cr,
-                                             const gint x, const gint y, const gint w, const gint h, const gint flags)
+static void _liquify_cairo_paint_curve_tool (cairo_t *cr, const gint x, const gint y, const gint w, const gint h,
+                                             const gint flags, void *data)
 {
   PREAMBLE;
   cairo_move_to (cr, 0.1, 0.9);
@@ -3376,8 +3501,8 @@ static void _liquify_cairo_paint_curve_tool (cairo_t *cr,
   POSTAMBLE;
 }
 
-static void _liquify_cairo_paint_node_tool (cairo_t *cr,
-                                            const gint x, const gint y, const gint w, const gint h, const gint flags)
+static void _liquify_cairo_paint_node_tool (cairo_t *cr, const gint x, const gint y, const gint w, const gint h,
+                                            const gint flags, void *data)
 {
   PREAMBLE;
   const double dashed[] = {0.2, 0.2};

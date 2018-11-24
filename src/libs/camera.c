@@ -138,7 +138,7 @@ static dt_lib_camera_property_t *_lib_property_add_new(dt_lib_camera_t *lib, con
       dt_bauhaus_widget_set_label(prop->values, NULL, label);
       g_object_ref_sink(prop->values);
 
-      prop->osd = DTGTK_TOGGLEBUTTON(dtgtk_togglebutton_new(dtgtk_cairo_paint_eye, CPF_STYLE_FLAT | CPF_DO_NOT_USE_BORDER));
+      prop->osd = DTGTK_TOGGLEBUTTON(dtgtk_togglebutton_new(dtgtk_cairo_paint_eye, CPF_STYLE_FLAT | CPF_DO_NOT_USE_BORDER, NULL));
       g_object_ref_sink(prop->osd);
       gtk_widget_set_size_request(GTK_WIDGET(prop->osd), DT_PIXEL_APPLY_DPI(14), -1);
       gtk_widget_set_tooltip_text(GTK_WIDGET(prop->osd), _("toggle view property in center view"));
@@ -439,6 +439,7 @@ void gui_init(dt_lib_module_t *self)
   // Camera control
   GtkWidget *label = dt_ui_section_label_new(_("camera control"));
   gtk_grid_attach(GTK_GRID(self->widget), label, lib->gui.rows++, 0, 2, 1);
+  dt_gui_add_help_link(self->widget, "camera_settings.html#camera_settings");
 
   GtkWidget *modes_label = gtk_label_new(_("modes"));
   GtkWidget *timer_label = gtk_label_new(_("timer (s)"));
@@ -459,11 +460,11 @@ void gui_init(dt_lib_module_t *self)
 
   // capture modes buttons
   lib->gui.toggle_timer = DTGTK_TOGGLEBUTTON(
-      dtgtk_togglebutton_new(dtgtk_cairo_paint_timer, CPF_STYLE_FLAT | CPF_DO_NOT_USE_BORDER));
+      dtgtk_togglebutton_new(dtgtk_cairo_paint_timer, CPF_STYLE_FLAT | CPF_DO_NOT_USE_BORDER, NULL));
   lib->gui.toggle_sequence = DTGTK_TOGGLEBUTTON(
-      dtgtk_togglebutton_new(dtgtk_cairo_paint_filmstrip, CPF_STYLE_FLAT | CPF_DO_NOT_USE_BORDER));
+      dtgtk_togglebutton_new(dtgtk_cairo_paint_filmstrip, CPF_STYLE_FLAT | CPF_DO_NOT_USE_BORDER, NULL));
   lib->gui.toggle_bracket = DTGTK_TOGGLEBUTTON(
-      dtgtk_togglebutton_new(dtgtk_cairo_paint_bracket, CPF_STYLE_FLAT | CPF_DO_NOT_USE_BORDER));
+      dtgtk_togglebutton_new(dtgtk_cairo_paint_bracket, CPF_STYLE_FLAT | CPF_DO_NOT_USE_BORDER, NULL));
 
   hbox = GTK_BOX(gtk_box_new(GTK_ORIENTATION_HORIZONTAL, DT_PIXEL_APPLY_DPI(5)));
   gtk_box_pack_start(hbox, GTK_WIDGET(lib->gui.toggle_timer), TRUE, TRUE, 0);
@@ -515,6 +516,7 @@ void gui_init(dt_lib_module_t *self)
   // Camera settings
   label = dt_ui_section_label_new(_("properties"));
   gtk_grid_attach(GTK_GRID(self->widget), GTK_WIDGET(label), 0, lib->gui.rows++, 2, 1);
+  dt_gui_add_help_link(self->widget, "camera_settings.html#camera_settings");
 
   lib->gui.prop_start = lib->gui.rows -1;
   lib->gui.prop_end = lib->gui.rows;
@@ -523,6 +525,7 @@ void gui_init(dt_lib_module_t *self)
   // user specified properties
   label = dt_ui_section_label_new(_("additional properties"));
   gtk_grid_attach(GTK_GRID(self->widget), GTK_WIDGET(label), 0, lib->gui.rows++, 2, 1);
+  dt_gui_add_help_link(self->widget, "camera_settings.html#camera_settings");
 
   label = gtk_label_new(_("label"));
   gtk_widget_set_halign(label, GTK_ALIGN_START);

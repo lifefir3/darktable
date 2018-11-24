@@ -153,7 +153,7 @@ void gui_post_expose(dt_lib_module_t *self, cairo_t *cri, int32_t width, int32_t
       cairo_set_line_width(cri, 0.5);
       double s = width * HANDLE_SIZE;
       dtgtk_cairo_paint_refresh(cri, (d->vertical ? width * d->vp_xpointer : width * 0.5) - (s * 0.5),
-                                (d->vertical ? height * 0.5 : height * d->vp_ypointer) - (s * 0.5), s, s, 0);
+                                (d->vertical ? height * 0.5 : height * d->vp_ypointer) - (s * 0.5), s, s, 0, NULL);
     }
   }
 }
@@ -263,6 +263,7 @@ void gui_init(dt_lib_module_t *self)
 
   /* initialize ui containers */
   self->widget = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+  dt_gui_add_help_link(self->widget, "snapshots.html#snapshots");
   d->snapshots_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
 
   /* create take snapshot button */
@@ -271,6 +272,7 @@ void gui_init(dt_lib_module_t *self)
   g_signal_connect(G_OBJECT(button), "clicked", G_CALLBACK(_lib_snapshots_add_button_clicked_callback), self);
   gtk_widget_set_tooltip_text(button, _("take snapshot to compare with another image "
                                         "or the same image at another stage of development"));
+  dt_gui_add_help_link(button, "snapshots.html#snapshots");
 
   /*
    * initialize snapshots

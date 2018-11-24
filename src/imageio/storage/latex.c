@@ -173,7 +173,7 @@ void gui_init(dt_imageio_module_storage_t *self)
   g_signal_connect(G_OBJECT(widget), "changed", G_CALLBACK(entry_changed_callback), self);
   g_free(tooltip_text);
 
-  widget = dtgtk_button_new(dtgtk_cairo_paint_directory, CPF_DO_NOT_USE_BORDER);
+  widget = dtgtk_button_new(dtgtk_cairo_paint_directory, CPF_DO_NOT_USE_BORDER, NULL);
   gtk_widget_set_tooltip_text(widget, _("select directory"));
   gtk_box_pack_start(GTK_BOX(hbox), widget, FALSE, FALSE, 0);
   g_signal_connect(G_OBJECT(widget), "clicked", G_CALLBACK(button_clicked), self);
@@ -358,10 +358,8 @@ int store(dt_imageio_module_storage_t *self, dt_imageio_module_data_t *sdata, co
                     self, sdata, num, total);
 
   printf("[export_job] exported to `%s'\n", filename);
-  char *trunc = filename + strlen(filename) - 32;
-  if(trunc < filename) trunc = filename;
-  dt_control_log(ngettext("%d/%d exported to `%s%s'", "%d/%d exported to `%s%s'", num),
-                 num, total, trunc != filename ? ".." : "", trunc);
+  dt_control_log(ngettext("%d/%d exported to `%s'", "%d/%d exported to `%s'", num),
+                 num, total, filename);
   return 0;
 }
 

@@ -168,6 +168,7 @@ static void *_lib_backgroundjobs_added(dt_lib_module_t *self, gboolean has_progr
   /* add job label */
   instance->label = gtk_label_new(message);
   gtk_widget_set_halign(instance->label, GTK_ALIGN_START);
+  gtk_label_set_ellipsize(GTK_LABEL(instance->label), PANGO_ELLIPSIZE_END);
   gtk_box_pack_start(GTK_BOX(instance->hbox), GTK_WIDGET(instance->label), TRUE, TRUE, 0);
   gtk_box_pack_start(GTK_BOX(vbox), GTK_WIDGET(instance->hbox), TRUE, TRUE, 0);
 
@@ -241,7 +242,7 @@ static gboolean _cancellable_gui_thread(gpointer user_data)
   _cancellable_gui_thread_t *params = (_cancellable_gui_thread_t *)user_data;
 
   GtkBox *hbox = GTK_BOX(params->instance->hbox);
-  GtkWidget *button = dtgtk_button_new(dtgtk_cairo_paint_cancel, CPF_STYLE_FLAT | CPF_DO_NOT_USE_BORDER);
+  GtkWidget *button = dtgtk_button_new(dtgtk_cairo_paint_cancel, CPF_STYLE_FLAT | CPF_DO_NOT_USE_BORDER, NULL);
   gtk_widget_set_size_request(button, DT_PIXEL_APPLY_DPI(17), DT_PIXEL_APPLY_DPI(17));
   g_signal_connect(G_OBJECT(button), "clicked", G_CALLBACK(_lib_backgroundjobs_cancel_callback_new), params->progress);
   gtk_box_pack_start(hbox, GTK_WIDGET(button), FALSE, FALSE, 0);

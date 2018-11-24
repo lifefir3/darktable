@@ -128,8 +128,6 @@ static int dt_gradient_events_button_pressed(struct dt_iop_module_t *module, flo
       gui->form_rotating = TRUE;
     else
       gui->form_dragging = TRUE;
-    gui->posx = pzx * darktable.develop->preview_pipe->backbuf_width;
-    gui->posy = pzy * darktable.develop->preview_pipe->backbuf_height;
     gui->dx = gpt->points[0] - gui->posx;
     gui->dy = gpt->points[1] - gui->posy;
     return 1;
@@ -298,8 +296,6 @@ static int dt_gradient_events_mouse_moved(struct dt_iop_module_t *module, float 
 {
   if(gui->form_dragging || gui->form_rotating)
   {
-    gui->posx = pzx * darktable.develop->preview_pipe->backbuf_width;
-    gui->posy = pzy * darktable.develop->preview_pipe->backbuf_height;
     dt_control_queue_redraw_center();
     return 1;
   }
@@ -307,7 +303,7 @@ static int dt_gradient_events_mouse_moved(struct dt_iop_module_t *module, float 
   {
     dt_dev_zoom_t zoom = dt_control_get_dev_zoom();
     int closeup = dt_control_get_dev_closeup();
-    float zoom_scale = dt_dev_get_zoom_scale(darktable.develop, zoom, closeup ? 2 : 1, 1);
+    float zoom_scale = dt_dev_get_zoom_scale(darktable.develop, zoom, 1<<closeup, 1);
     float as = 0.005f / zoom_scale * darktable.develop->preview_pipe->backbuf_width;
     int in, inb, near, ins;
     float x = pzx * darktable.develop->preview_pipe->backbuf_width;

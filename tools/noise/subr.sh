@@ -175,15 +175,17 @@ pdf_tools_installed() {
 
 	if tool_installed pdftk; then
 		pdfcat() {
-			local output=$1; shift
-			local inputs=$@
+			local output inputs
+			output=$1; shift
+			inputs=$@
 			pdftk $inputs cat output $output
 		}
 		missing_tool=0
 	elif tool_installed gs; then
 		pdfcat() {
-			local output=$1; shift
-			local inputs=$@
+			local output inputs
+			output=$1; shift
+			inputs=$@
 			gs -dBATCH -dNOPAUSE -q -sDEVICE=pdfwrite -sOutputFile=$output $inputs
 		}
 		missing_tool=0
@@ -214,37 +216,6 @@ of the presets. Please install this command and re-run this script."; then
 	fi
 
 	return $missing_tool
-}
-
-internal_tools_available() {
-	local missing_tool
-	missing_tool=0
-
-	echo "--> Check for internal tools availability"
-
-	  if ! tool_installed awk "
-awk is needed to prepare presets."; then
-    missing_tool=1
-  fi
-
-	if ! tool_installed make "
-make is required to build darktable tools dedicated to noise profiling.
-Please install this command and re-run this script."; then
-		missing_tool=1
-	fi
-
-	if ! tool_installed cc "
-A compilator (eg. gcc) is required to build darktable tools dedicated to
-noise profiling. Please install this command and re-run this script."; then
-		missing_tool=1
-	fi
-
-	if [ "$missing_tool" = "1" ]; then
-		return 1
-	fi
-
-	echo "--> Build profiling tools"
-	make -C "$scriptdir"
 }
 
 get_darktable_version() {
@@ -329,7 +300,7 @@ get_image_iso() {
 			#     1. "Exif.NikonIi.*" are bytes, not even
 			#        shorts, so they're smaller than other
 			#        keys.
-			#     2. That looks like versionned nodes:
+			#     2. That looks like versioned nodes:
 			#        "Nikon2" vs. "Nikon3".
 			iso=$(get_exif_key "$file" Exif.Nikon3.ISOSpeed)
 			if [ -z "$iso" -o "$iso" = "0" ]; then
@@ -337,6 +308,11 @@ get_image_iso() {
 			fi
 			if [ -z "$iso" -o "$iso" = "0" ]; then
 				iso=$(get_exif_key "$file" Exif.NikonIi.ISO)
+				# read hi/low iso setting
+				ciso=$(echo $iso | cut -d' ' -f2)
+				if [ "$ciso" = "Hi" -o "$ciso" = "Lo" ]; then
+					iso=$(echo $iso  | cut -d' '  -f1 )
+				fi
 			fi
 			;;
     [Cc][Aa][Nn][Oo][Nn]*)
@@ -444,7 +420,7 @@ list_input_images() {
 		case "$image" in
 		*.[Jj][Pp][Gg]|*.[Jj][Pp][Ee][Gg])
 			# Skip jpeg files, if any. Other files don't
-			# have Exif and will be skept automatically.
+			# have Exif and will be skipped automatically.
 			continue
 			;;
 		esac
@@ -497,15 +473,16 @@ export_thumbnail() {
 }
 
 check_exposure() {
-	local orig input over under ret convert_flags
+	local orig input inputdir over under ret convert_flags
 	orig=$1
 	input=$2
+	inputdir=$(dirname $input)
 
 	ret=0
 
 	# See: http://www.imagemagick.org/discourse-server/viewtopic.php?f=1&t=19805
-
-	convert_flags="-channel RGB -threshold 99% -separate -append"
+	# and https://www.imagemagick.org/script/architecture.php#tera-pixel for the temporary-path thing
+	convert_flags="-define registry:temporary-path=${inputdir}/tmp -channel RGB -threshold 99% -separate -append"
 
 	over=$(convert "$input" $convert_flags -format "%[mean]" info: | cut -f1 -d.)
 	if [ "$over" -a "$over" -lt 80 ]; then

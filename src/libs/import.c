@@ -56,7 +56,7 @@ DT_MODULE(1)
 
 
 #ifdef HAVE_GPHOTO2
-/** helper function to update ui with available cameras and ther actionbuttons */
+/** helper function to update ui with available cameras and their actionbuttons */
 static void _lib_import_ui_devices_update(dt_lib_module_t *self);
 #endif
 
@@ -248,11 +248,13 @@ void _lib_import_ui_devices_update(dt_lib_module_t *self)
       {
         g_signal_connect(G_OBJECT(ib), "clicked", G_CALLBACK(_lib_import_from_camera_callback), camera);
         gtk_widget_set_halign(gtk_bin_get_child(GTK_BIN(ib)), GTK_ALIGN_START);
+        dt_gui_add_help_link(ib, "lighttable_panels.html#import_from_camera");
       }
       if(tb)
       {
         g_signal_connect(G_OBJECT(tb), "clicked", G_CALLBACK(_lib_import_tethered_callback), camera);
         gtk_widget_set_halign(gtk_bin_get_child(GTK_BIN(tb)), GTK_ALIGN_START);
+        dt_gui_add_help_link(tb, "lighttable_panels.html#import_from_camera");
       }
       gtk_box_pack_start(GTK_BOX(d->devices), vbx, FALSE, FALSE, 0);
     } while((citem = g_list_next(citem)) != NULL);
@@ -665,10 +667,8 @@ static void _lib_import_update_preview(GtkFileChooser *file_chooser, gpointer da
     no_preview_fallback = TRUE;
   }
 
-  // unfortunately we can not use following, because frequently it uses wrong orientation
-  // pixbuf = gdk_pixbuf_new_from_file_at_size(filename, 128, 128, NULL);
-
-  have_preview = (pixbuf != NULL);
+  // Step 1: try to check whether the picture contains embedded thumbnail
+  // In case it has, we'll use that thumbnail to show on the dialog
   if(!have_preview && !no_preview_fallback)
   {
     uint8_t *buffer = NULL;
@@ -680,6 +680,9 @@ static void _lib_import_update_preview(GtkFileChooser *file_chooser, gpointer da
       GdkPixbuf *tmp;
       GdkPixbufLoader *loader = gdk_pixbuf_loader_new();
       if (!gdk_pixbuf_loader_write(loader, buffer, size, NULL)) goto cleanup;
+      // Calling gdk_pixbuf_loader_close forces the data to be parsed by the
+      // loader. We must do this before calling gdk_pixbuf_loader_get_pixbuf.
+      if(!gdk_pixbuf_loader_close(loader, NULL)) goto cleanup;
       if (!(tmp = gdk_pixbuf_loader_get_pixbuf(loader))) goto cleanup;
       float ratio = 1.0 * gdk_pixbuf_get_height(tmp) / gdk_pixbuf_get_width(tmp);
       int width = 128, height = 128 * ratio;
@@ -694,8 +697,21 @@ static void _lib_import_update_preview(GtkFileChooser *file_chooser, gpointer da
       g_object_unref(loader); // This should clean up tmp as well
     }
   }
+
+  // Step 2: if we were not able to get a thumbnail at step 1,
+  // read the whole file to get a small size thumbnail
+  // this will not try to read DNG files at all
+  if(!have_preview && !no_preview_fallback)
+  {
+    pixbuf = gdk_pixbuf_new_from_file_at_size(filename, 128, 128, NULL);
+    if(pixbuf != NULL) have_preview = TRUE;
+  }
+
+  // If we got a thumbnail (either embedded or reading the file directly)
+  // we need to find out the rotation as well
   if(have_preview && !no_preview_fallback)
   {
+
     // get image orientation
     dt_image_t img = { 0 };
     (void)dt_exif_read(&img, filename);
@@ -722,7 +738,11 @@ static void _lib_import_update_preview(GtkFileChooser *file_chooser, gpointer da
       pixbuf = tmp;
     }
   }
-  if(no_preview_fallback || !have_preview)
+
+  // if no thumbanail found or read failed for whatever reason
+  // or in case of DNG files
+  // just display the default darktable logo
+  if(!have_preview || no_preview_fallback)
   {
     /* load the dt logo as a brackground */
     cairo_surface_t *surface = dt_util_get_logo(128.0);
@@ -971,9 +991,11 @@ void gui_init(dt_lib_module_t *self)
   dt_lib_import_t *d = (dt_lib_import_t *)g_malloc0(sizeof(dt_lib_import_t));
   self->data = (void *)d;
   self->widget = gtk_box_new(GTK_ORIENTATION_VERTICAL, 5);
+  dt_gui_add_help_link(self->widget, "lighttable_panels.html#import");
 
   /* add import single image buttons */
   GtkWidget *widget = gtk_button_new_with_label(_("image"));
+  dt_gui_add_help_link(widget, "lighttable_panels.html#import_from_fs");
   d->import_file = GTK_BUTTON(widget);
   gtk_widget_set_halign(gtk_bin_get_child(GTK_BIN(widget)), GTK_ALIGN_START);
   gtk_widget_set_tooltip_text(widget, _("select one or more images to import"));
@@ -984,6 +1006,7 @@ void gui_init(dt_lib_module_t *self)
 
   /* adding the import folder button */
   widget = gtk_button_new_with_label(_("folder"));
+  dt_gui_add_help_link(widget, "lighttable_panels.html#import_from_fs");
   d->import_directory = GTK_BUTTON(widget);
   gtk_widget_set_halign(gtk_bin_get_child(GTK_BIN(widget)), GTK_ALIGN_START);
   gtk_widget_set_tooltip_text(widget, _("select a folder to import as film roll"));
@@ -995,6 +1018,7 @@ void gui_init(dt_lib_module_t *self)
 #ifdef HAVE_GPHOTO2
   /* add the rescan button */
   GtkButton *scan = GTK_BUTTON(gtk_button_new_with_label(_("scan for devices")));
+  dt_gui_add_help_link(GTK_WIDGET(scan), "lighttable_panels.html#import_from_camera");
   d->scan_devices = scan;
   gtk_widget_set_halign(gtk_bin_get_child(GTK_BIN(scan)), GTK_ALIGN_START);
   gtk_widget_set_tooltip_text(GTK_WIDGET(scan), _("scan for newly attached devices"));

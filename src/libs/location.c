@@ -31,23 +31,6 @@
 
 DT_MODULE(1)
 
-typedef struct dt_lib_location_t
-{
-  GtkEntry *search;
-  GtkWidget *result;
-  GList *callback_params;
-
-  GList *places;
-
-  /* result buffer written to by */
-  gchar *response;
-  size_t response_size;
-
-  /* pin, track or polygon currently shown on the map */
-  GObject *marker;
-  dt_geo_map_display_t marker_type;
-} dt_lib_location_t;
-
 typedef enum _lib_location_type_t
 {
   LOCATION_TYPE_VILLAGE,
@@ -68,8 +51,27 @@ typedef struct _lib_location_result_t
   dt_geo_map_display_t marker_type;
   GList *marker_points;
   gchar *name;
-
 } _lib_location_result_t;
+
+typedef struct dt_lib_location_t
+{
+  GtkEntry *search;
+  GtkWidget *result;
+  GList *callback_params;
+
+  GList *places;
+
+  /* result buffer written to by */
+  gchar *response;
+  size_t response_size;
+
+  /* pin, track or polygon currently shown on the map */
+  GObject *marker;
+  dt_geo_map_display_t marker_type;
+
+  /* remember the currently selected search result so we can put it into a preset */
+  _lib_location_result_t *selected_location;
+} dt_lib_location_t;
 
 typedef struct _callback_param_t
 {
@@ -87,6 +89,8 @@ static gboolean _lib_location_result_item_activated(GtkButton *button, GdkEventB
 static void _lib_location_parser_start_element(GMarkupParseContext *cxt, const char *element_name,
                                                const char **attribute_names, const gchar **attribute_values,
                                                gpointer user_data, GError **error);
+
+static void clear_search(dt_lib_location_t *lib);
 
 const char *name(dt_lib_module_t *self)
 {
@@ -107,6 +111,9 @@ uint32_t container(dt_lib_module_t *self)
 
 void gui_reset(dt_lib_module_t *self)
 {
+  dt_lib_location_t *lib = (dt_lib_location_t *)self->data;
+  gtk_entry_set_text(lib->search, "");
+  clear_search(lib);
 }
 
 int position()
@@ -115,7 +122,7 @@ int position()
 }
 
 /*
-  http://nominatim.openstreetmap.org/search/norrköping?format=xml&limit=5
+  https://nominatim.openstreetmap.org/search/norrköping?format=xml&limit=5
  */
 void gui_init(dt_lib_module_t *self)
 {
@@ -123,6 +130,7 @@ void gui_init(dt_lib_module_t *self)
   dt_lib_location_t *lib = self->data;
 
   self->widget = gtk_box_new(GTK_ORIENTATION_VERTICAL, DT_PIXEL_APPLY_DPI(5));
+  dt_gui_add_help_link(self->widget, dt_get_help_url(self->plugin_name));
 
   /* add search box */
   lib->search = GTK_ENTRY(gtk_entry_new());
@@ -172,7 +180,7 @@ static GtkWidget *_lib_location_place_widget_new(dt_lib_location_t *lib, _lib_lo
   gtk_box_pack_start(GTK_BOX(vb), w, FALSE, FALSE, 0);
 
   /* type icon */
-  GtkWidget *icon = dtgtk_icon_new(dtgtk_cairo_paint_triangle, CPF_DIRECTION_LEFT);
+  GtkWidget *icon = dtgtk_icon_new(dtgtk_cairo_paint_triangle, CPF_DIRECTION_LEFT, NULL);
   gtk_widget_set_size_request(icon, DT_PIXEL_APPLY_DPI(10), -1);
 
   /* setup layout */
@@ -245,6 +253,30 @@ static void _clear_markers(dt_lib_location_t *lib)
   lib->marker_type = MAP_DISPLAY_NONE;
 }
 
+static void free_location(_lib_location_result_t *location)
+{
+  g_free(location->name);
+  g_list_free_full(location->marker_points, free);
+  free(location);
+}
+
+static void clear_search(dt_lib_location_t *lib)
+{
+  g_free(lib->response);
+  lib->response = NULL;
+  lib->response_size = 0;
+  lib->selected_location = NULL;
+
+  g_list_free_full(lib->places, (GDestroyNotify)free_location);
+  lib->places = NULL;
+
+  gtk_container_foreach(GTK_CONTAINER(lib->result), (GtkCallback)gtk_widget_destroy, NULL);
+  g_list_free_full(lib->callback_params, free);
+  lib->callback_params = NULL;
+
+  _clear_markers(lib);
+}
+
 static void _show_location(dt_lib_location_t *lib, _lib_location_result_t *p)
 {
   if(isnan(p->bbox_lon1) || isnan(p->bbox_lat1) || isnan(p->bbox_lon2) || isnan(p->bbox_lat2))
@@ -261,6 +293,7 @@ static void _show_location(dt_lib_location_t *lib, _lib_location_result_t *p)
 
   lib->marker = dt_view_map_add_marker(darktable.view_manager, p->marker_type, p->marker_points);
   lib->marker_type = p->marker_type;
+  lib->selected_location = p;
 }
 
 /* called when search job has been processed and
@@ -300,7 +333,7 @@ static gboolean _lib_location_search(gpointer user_data)
 
   dt_lib_module_t *self = (dt_lib_module_t *)user_data;
   dt_lib_location_t *lib = (dt_lib_location_t *)self->data;
-  gchar *query = NULL, *text = NULL;
+  gchar *query = NULL, *text = NULL, *search_url = NULL;
 
   /* get escaped search text */
   text = g_uri_escape_string(gtk_entry_get_text(lib->search), NULL, FALSE);
@@ -308,22 +341,11 @@ static gboolean _lib_location_search(gpointer user_data)
   if(!(text && *text)) goto bail_out;
 
   /* clean up previous results before adding new */
-  g_free(lib->response);
-  lib->response = NULL;
-  lib->response_size = 0;
-
-  g_list_free_full(lib->places, g_free);
-  lib->places = NULL;
-
-  gtk_container_foreach(GTK_CONTAINER(lib->result), (GtkCallback)gtk_widget_destroy, NULL);
-  g_list_free_full(lib->callback_params, free);
-  lib->callback_params = NULL;
-
-  _clear_markers(lib);
+  clear_search(lib);
 
   /* build the query url */
-  query = dt_util_dstrcat(query, "http://nominatim.openstreetmap.org/search/%s?format=xml&limit=%d&polygon_text=1", text,
-                          LIMIT_RESULT);
+  search_url = dt_conf_get_string("plugins/map/geotagging_search_url");
+  query = dt_util_dstrcat(query, search_url, text, LIMIT_RESULT);
   /* load url */
   curl = curl_easy_init();
   if(!curl) goto bail_out;
@@ -333,6 +355,8 @@ static gboolean _lib_location_search(gpointer user_data)
   curl_easy_setopt(curl, CURLOPT_WRITEDATA, lib);
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, _lib_location_curl_write_data);
   curl_easy_setopt(curl, CURLOPT_USERAGENT, (char *)darktable_package_string);
+  curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+  curl_easy_setopt(curl, CURLOPT_TIMEOUT, 20L);
 
   res = curl_easy_perform(curl);
   if(res != 0) goto bail_out;
@@ -367,6 +391,7 @@ bail_out:
 
   g_free(text);
   g_free(query);
+  g_free(search_url);
 
   if(ctx) g_markup_parse_context_free(ctx);
 
@@ -571,6 +596,107 @@ bail_out:
   g_free(place->name);
   g_free(place);
 }
+
+void init_presets(dt_lib_module_t *self)
+{}
+
+struct params_fixed_t
+{
+  int32_t relevance;
+  _lib_location_type_t type;
+  float lon;
+  float lat;
+  float bbox_lon1, bbox_lat1, bbox_lon2, bbox_lat2;
+  dt_geo_map_display_t marker_type;
+} __attribute__((packed));
+
+void *get_params(dt_lib_module_t *self, int *size)
+{
+  dt_lib_location_t *lib = (dt_lib_location_t *)self->data;
+  _lib_location_result_t *location = lib->selected_location;
+
+  // we have nothing to store when the user hasn't picked a search result
+  if(location == NULL) return NULL;
+
+  const size_t size_fixed = sizeof(struct params_fixed_t);
+  const size_t size_name = strlen(location->name) + 1;
+  const size_t size_points = 2 * sizeof(float) * g_list_length(location->marker_points);
+  const size_t size_total = size_fixed + size_name + size_points;
+
+  void *params = malloc(size_total);
+  struct params_fixed_t *params_fixed = (struct params_fixed_t *)params;
+  params_fixed->relevance = location->relevance;
+  params_fixed->type = location->type;
+  params_fixed->lon = location->lon;
+  params_fixed->lat = location->lat;
+  params_fixed->bbox_lon1 = location->bbox_lon1;
+  params_fixed->bbox_lat1 = location->bbox_lat1;
+  params_fixed->bbox_lon2 = location->bbox_lon2;
+  params_fixed->bbox_lat2 = location->bbox_lat2;
+  params_fixed->marker_type = location->marker_type;
+
+  memcpy(params + size_fixed, location->name, size_name);
+
+  float *points = (float *)(params + size_fixed + size_name);
+  for(GList *iter = location->marker_points; iter; iter = g_list_next(iter), points += 2)
+  {
+    dt_geo_map_display_point_t *point = (dt_geo_map_display_point_t *)iter->data;
+    points[0] = point->lat;
+    points[1] = point->lon;
+  }
+
+  *size = size_total;
+  return params;
+}
+
+int set_params(dt_lib_module_t *self, const void *params, int size)
+{
+  dt_lib_location_t *lib = (dt_lib_location_t *)self->data;
+
+  const size_t size_fixed = sizeof(struct params_fixed_t);
+
+  if(size < size_fixed) return 1;
+
+  const struct params_fixed_t *params_fixed = (struct params_fixed_t *)params;
+  const char *name = (char *)(params + size_fixed);
+  const size_t size_name = strlen(name) + 1;
+
+  if(size_fixed + size_name > size) return 1;
+
+  const size_t size_points = size - (size_fixed + size_name);
+
+  if(size_points % 2 * sizeof(float) != 0) return 1;
+
+  _lib_location_result_t *location = (_lib_location_result_t *)malloc(sizeof(_lib_location_result_t));
+
+  location->relevance = params_fixed->relevance;
+  location->type = params_fixed->type;
+  location->lon = params_fixed->lon;
+  location->lat = params_fixed->lat;
+  location->bbox_lon1 = params_fixed->bbox_lon1;
+  location->bbox_lat1 = params_fixed->bbox_lat1;
+  location->bbox_lon2 = params_fixed->bbox_lon2;
+  location->bbox_lat2 = params_fixed->bbox_lat2;
+  location->marker_type = params_fixed->marker_type;
+  location->name = g_strdup(name);
+  location->marker_points = NULL;
+
+  for(const float *points = (float *)(params + size_fixed + size_name); (void *)points < params + size; points += 2)
+  {
+    dt_geo_map_display_point_t *p = (dt_geo_map_display_point_t *)malloc(sizeof(dt_geo_map_display_point_t));
+    p->lat = points[0];
+    p->lon = points[1];
+    location->marker_points = g_list_append(location->marker_points, p);
+  }
+
+  clear_search(lib);
+  lib->places = g_list_append(lib->places, location);
+  gtk_entry_set_text(lib->search, "");
+  _lib_location_search_finish(self);
+
+  return 0;
+}
+
 // modelines: These editor modelines have been set for all relevant files by tools/update_modelines.sh
 // vim: shiftwidth=2 expandtab tabstop=2 cindent
 // kate: tab-indents: off; indent-width 2; replace-tabs on; indent-mode cstyle; remove-trailing-spaces modified;

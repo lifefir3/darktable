@@ -29,6 +29,7 @@
 #include "develop/tiling.h"
 #include "gui/gtk.h"
 #include "iop/iop_api.h"
+#include "common/iop_group.h"
 
 #include <gtk/gtk.h>
 #include <stdlib.h>
@@ -104,7 +105,7 @@ int flags()
 // where does it appear in the gui?
 int groups()
 {
-  return IOP_GROUP_TONE;
+  return dt_iop_get_group("local contrast", IOP_GROUP_TONE);
 }
 
 int legacy_params(
@@ -299,20 +300,38 @@ void process_sse2(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, c
         dt_pthread_mutex_lock(&g->lock);
         const uint64_t hash = g->hash;
         dt_pthread_mutex_unlock(&g->lock);
-        if(hash != 0 && !dt_dev_sync_pixelpipe_hash(self->dev, piece->pipe, 0, self->priority, &g->lock, &g->hash))
+        if(hash == 0)
+        {
+          // Don't try grabbing anything from preview pipe.
+        }
+        else if(!dt_dev_sync_pixelpipe_hash(self->dev, piece->pipe, 0, self->priority, &g->lock, &g->hash))
+        {
           // TODO: remove this debug output at some point:
           dt_control_log(_("local laplacian: inconsistent output"));
-        dt_pthread_mutex_lock(&g->lock);
-        // grab preview pipe buffers here:
-        b = g->ll_boundary;
-        dt_pthread_mutex_unlock(&g->lock);
-        if(b.wd > 0 && b.ht > 0) b.mode = 2;
+        }
+        else
+        {
+          dt_pthread_mutex_lock(&g->lock);
+          // grab preview pipe buffers here:
+          b = g->ll_boundary;
+          dt_pthread_mutex_unlock(&g->lock);
+          if(b.wd > 0 && b.ht > 0) b.mode = 2;
+        }
       }
     }
 
     b.roi = roi_in;
     b.buf = &piece->buf_in;
-    local_laplacian_sse2(i, o, roi_in->width, roi_in->height, d->midtone, d->sigma_s, d->sigma_r, d->detail, &b);
+    // also lock the ll_boundary in case we're using it.
+    // could get away without this if the preview pipe didn't also free the data below.
+    const int lockit = self->dev->gui_attached && g && piece->pipe->type == DT_DEV_PIXELPIPE_FULL;
+    if(lockit)
+    {
+      dt_pthread_mutex_lock(&g->lock);
+      local_laplacian_sse2(i, o, roi_in->width, roi_in->height, d->midtone, d->sigma_s, d->sigma_r, d->detail, &b);
+      dt_pthread_mutex_unlock(&g->lock);
+    }
+    else local_laplacian_sse2(i, o, roi_in->width, roi_in->height, d->midtone, d->sigma_s, d->sigma_r, d->detail, &b);
 
     // preview pixelpipe stores values.
     if(self->dev->gui_attached && g && piece->pipe->type == DT_DEV_PIXELPIPE_PREVIEW)
@@ -368,7 +387,7 @@ void init(dt_iop_module_t *module)
   // by default:
   module->default_enabled = 0;
   // order has to be changed by editing the dependencies in tools/iop_dependencies.py
-  module->priority = 588; // module order created by iop_dependencies.py, do not edit!
+  module->priority = 585; // module order created by iop_dependencies.py, do not edit!
   module->params_size = sizeof(dt_iop_bilat_params_t);
   module->gui_data = NULL;
   // init defaults:
@@ -497,6 +516,7 @@ void gui_init(dt_iop_module_t *self)
   dt_pthread_mutex_init(&g->lock, NULL);
   g->hash = 0;
   self->widget = gtk_box_new(GTK_ORIENTATION_VERTICAL, DT_BAUHAUS_SPACE);
+  dt_gui_add_help_link(self->widget, dt_get_help_url(self->op));
 
   g->mode = dt_bauhaus_combobox_new(self);
   dt_bauhaus_widget_set_label(g->mode, NULL, _("mode"));
@@ -507,7 +527,7 @@ void gui_init(dt_iop_module_t *self)
   dt_bauhaus_combobox_set(g->mode, s_mode_local_laplacian);
   gtk_widget_set_tooltip_text(g->mode, _("the filter used for local contrast enhancement. bilateral is faster but can lead to artifacts around edges for extreme settings."));
 
-  g->detail = dt_bauhaus_slider_new_with_range(self, 0.0, 500.0, 1.0, 100.0, 0);
+  g->detail = dt_bauhaus_slider_new_with_range(self, 0.0, 500.0, 1.0, 120.0, 0);
   gtk_box_pack_start(GTK_BOX(self->widget), g->detail, TRUE, TRUE, 0);
   dt_bauhaus_widget_set_label(g->detail, NULL, _("detail"));
   dt_bauhaus_slider_set_format(g->detail, "%.0f%%");

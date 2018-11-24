@@ -44,8 +44,10 @@ ALL_DEVELOPERS = [
     "Pascal Obry",
     "Pascal de Bruijn",
     "Pedro Côrte-Real",
+    "Peter Budai",
     "Roman Lebedev",
     "Simon Spannagel",
+    "Stefan Schöfegger",
     "Tobias Ellinghaus",
     "Ulrich Pegelow",
     "johannes hanika",
@@ -65,15 +67,13 @@ def get_shortlog(path="")
   return hash
 end
 
-Dir.chdir(File.dirname(__FILE__)+"/../")
-
 SHORTLOG = get_shortlog().keep_if{ |authorname, count| count >= SHORTLOG_THRESHOLD }
 
 # all developers, that made any changes in selected timeframe
 DEVELOPERS = SHORTLOG.select{ |authorname, count| ALL_DEVELOPERS.include?(authorname) }
 
 # all the people that changed PO files
-TRANSLATORS = get_shortlog("./po/*.po ./doc/man/po/*.po") \
+TRANSLATORS = get_shortlog("./po/*.po ./doc/man/po/*.po ./doc/usermanual/po/*.po") \
 # and keep only the ones with at least this much commits
   .keep_if { |authorname, count| count >= TRANSLATOR_THRESHOLD }
 
@@ -93,6 +93,8 @@ puts
 puts "* contributors (at least #{CONTRIBUTORS.values.min} commits):"
 puts CONTRIBUTORS.keys.join(",\n") + "."
 puts
+
+puts "FIXME: account for rawspeed.\n\n"
 
 puts "And all those of you that made previous releases possible"
 

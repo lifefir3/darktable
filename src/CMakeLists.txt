@@ -29,6 +29,7 @@ FILE(GLOB SOURCE_FILES
   "common/fswatch.c"
   "common/gaussian.c"
   "common/grouping.c"
+  "common/guided_filter.c"
   "common/history.c"
   "common/gpx.c"
   "common/image.c"
@@ -39,6 +40,7 @@ FILE(GLOB SOURCE_FILES
   "common/imageio_png.c"
   "common/imageio_module.c"
   "common/imageio_pfm.c"
+  "common/imageio_pnm.c"
   "common/imageio_rgbe.c"
   "common/imageio_tiff.c"
   "common/imageio_gm.c"
@@ -47,6 +49,7 @@ FILE(GLOB SOURCE_FILES
   "common/interpolation.c"
   "common/locallaplacian.c"
   "common/locallaplaciancl.c"
+  "common/l10n.c"
   "common/metadata.c"
   "common/mipmap_cache.c"
   "common/module.c"
@@ -67,6 +70,8 @@ FILE(GLOB SOURCE_FILES
   "common/resource_limits.c"
   "common/histogram.c"
   "common/undo.c"
+  "common/usermanual_url.c"
+  "common/iop_group.c"
   "control/control.c"
   "control/crawler.c"
   "control/jobs.c"
@@ -84,6 +89,8 @@ FILE(GLOB SOURCE_FILES
   "develop/blend.c"
   "develop/blend_gui.c"
   "develop/tiling.c"
+  "common/dwt.c"
+  "common/heal.c"
   "develop/masks/masks.c"
   "develop/format.c"
   "dtgtk/button.c"
@@ -103,6 +110,7 @@ FILE(GLOB SOURCE_FILES
   "gui/preferences.c"
   "gui/presets.c"
   "gui/styles_dialog.c"
+  "gui/color_picker_proxy.c"
   "libs/lib.c"
   "views/view.c"
   )
@@ -167,10 +175,24 @@ if(NOT COMPILER_SUPPORTS_C11)
   message(FATAL_ERROR "The compiler ${CMAKE_C_COMPILER} has no C11 support. Please use a different C compiler.")
 endif()
 
-CHECK_CXX_COMPILER_FLAG("-std=c++11" COMPILER_SUPPORTS_CXX11)
-if(NOT COMPILER_SUPPORTS_CXX11)
-        message(FATAL_ERROR "The compiler ${CMAKE_CXX_COMPILER} has no C++11 support. Please use a different C++ compiler.")
+# yes, need to keep both the CMAKE_CXX_FLAGS and CMAKE_CXX_STANDARD.
+# with just the CMAKE_CXX_STANDARD, try_compile() breaks:
+#   https://gitlab.kitware.com/cmake/cmake/issues/16456
+# with just the CMAKE_CXX_FLAGS, 'bundled' pugixml breaks tests
+#   https://github.com/darktable-org/rawspeed/issues/112#issuecomment-321517003
+
+message(STATUS "Checking for -std=c++14 support")
+CHECK_CXX_COMPILER_FLAG("-std=c++14" COMPILER_SUPPORTS_CXX14)
+if(NOT COMPILER_SUPPORTS_CXX14)
+  message(FATAL_ERROR "The compiler ${CMAKE_CXX_COMPILER} has no C++14 support. Please use a different C++ compiler.")
+else()
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++14")
+  message(STATUS "Checking for -std=c++14 support - works")
 endif()
+
+set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=c99")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
@@ -313,6 +335,13 @@ if(USE_OPENJPEG)
   endif(OpenJPEG_FOUND)
 endif(USE_OPENJPEG)
 
+find_package(IsoCodes 3.66)
+if(ISO_CODES_FOUND)
+  add_definitions("-DHAVE_ISO_CODES")
+else(ISO_CODES_FOUND)
+  message(STATUS "no suitable iso-codes, there will be no language names in the preferences")
+endif(ISO_CODES_FOUND)
+
 #
 # Detect compile of optional pwstorage backends
 #
@@ -405,7 +434,8 @@ if(GPHOTO2_FOUND)
   # CPack ignores variables you define in your CMakeLists.txt file,
   # and only variables ${CPACK_*} are correctly used.
   # so this needs to be saved by adding another variable with a name beginning with CPACK
-  set( CPACK_NSIS_GPHOTO2_VERSION ${GPHOTO2_VERSION_STRING} CACHE STRING "GPHOT2 version string")
+  set( CPACK_NSIS_GPHOTO2_VERSION ${GPHOTO2_VERSION_STRING} CACHE STRING "GPHOTO2 version string")
+  set( CPACK_NSIS_GRAPHICSMAGICK_VERSION ${GraphicsMagick_PKGCONF_VERSION} CACHE STRING "GM version string")
 endif(GPHOTO2_FOUND)
 
 # Check for __builtin_cpu_supports here due to a bug in clang/llvm. LLVM uses
@@ -448,7 +478,7 @@ endif(WIN32)
 
 if(NOT CUSTOM_CFLAGS)
   if(BUILD_SSE2_CODEPATHS)
-    #we MUST always specify our requred instruction set, native might not detect it
+    #we MUST always specify our required instruction set, native might not detect it
     set(DT_REQ_INSTRUCTIONS "-msse2")
   endif()
 
@@ -599,6 +629,9 @@ if(USE_MAP)
     add_definitions("-DHAVE_MAP")
     if(NOT OSMGPSMAP_VERSION VERSION_LESS 1.1.0)
       add_definitions("-DHAVE_OSMGPSMAP_110_OR_NEWER")
+    endif()
+    if(OSMGPSMAP_VERSION VERSION_GREATER 1.1.0)
+      add_definitions("-DHAVE_OSMGPSMAP_NEWER_THAN_110")
     endif()
     include_directories(SYSTEM ${OSMGPSMAP_INCLUDE_DIRS})
     list(APPEND LIBS ${OSMGPSMAP_LIBRARIES})
@@ -806,9 +839,20 @@ endif(APPLE)
 target_link_libraries(darktable lib_darktable)
 
 if (WIN32)
-  set_target_properties(darktable PROPERTIES LINK_FLAGS "-mwindows -Wl,-subsystem,windows")
+  set_target_properties(darktable PROPERTIES LINK_FLAGS "-mconsole -mwindows -Wl,-subsystem,console")
   _detach_debuginfo (darktable bin)
   _detach_debuginfo (lib_darktable bin)
+else()
+    # Note that $ORIGIN is not a variable but has a special meaning at runtime.
+    # The string "$ORIGIN" should end up in the executable as-is.
+    set(RPATH_DT "$ORIGIN")
+    if (APPLE)
+        # The string "@loader_path" should end up in the executable as-is.
+        set(RPATH_DT "@loader_path")
+    endif()
+    set_target_properties(darktable
+                          PROPERTIES
+                          INSTALL_RPATH ${RPATH_DT}/../${CMAKE_INSTALL_LIBDIR}/darktable)
 endif(WIN32)
 
 install(TARGETS darktable DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT DTApplication)

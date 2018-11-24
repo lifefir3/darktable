@@ -50,13 +50,16 @@ rm -rf darktable-"$dt_decoration"/doc/usermanual
 echo "* removing tools/regression_tests"
 rm -rf darktable-"$dt_decoration"/tools/regression_tests
 
+# drop all git-related stuff
+find darktable-"$dt_decoration"/ -iname '.git*' -delete
+
 # ... and also remove RELEASE_NOTES. that file is just for internal use
 #echo "* removing RELEASE_NOTES"
 #rm -rf darktable-$dt_decoration/RELEASE_NOTES
 
 # wrap it up again
 echo "* creating final tarball"
-tar cf "darktable-$dt_decoration.tar$ darktable-$dt_decoration/"
+tar cf darktable-$dt_decoration.tar darktable-$dt_decoration/ || exit
 rm "$DT_SRC_DIR/darktable-$dt_decoration.tar"
 xz -z -v -9 -e "darktable-$dt_decoration.tar"
 cp "darktable-$dt_decoration.tar.xz" "$DT_SRC_DIR"

@@ -41,6 +41,7 @@
 #include "gui/accelerators.h"
 #include "gui/gtk.h"
 #include "iop/iop_api.h"
+#include "common/iop_group.h"
 
 // for Kelvin temperature and bogus WB
 #include "common/colorspaces.h"
@@ -58,6 +59,11 @@ DT_MODULE_INTROSPECTION(3, dt_iop_temperature_params_t)
 
 #define DT_IOP_NUM_OF_STD_TEMP_PRESETS 3
 
+#define COLORED_SLIDERS 0
+
+//storing the last picked color (if any)
+static float old[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+
 static void gui_sliders_update(struct dt_iop_module_t *self);
 
 typedef struct dt_iop_temperature_params_t
@@ -70,6 +76,9 @@ typedef struct dt_iop_temperature_gui_data_t
   GtkWidget *scale_k, *scale_tint, *coeff_widgets, *scale_r, *scale_g, *scale_b, *scale_g2;
   GtkWidget *presets;
   GtkWidget *finetune;
+  GtkWidget *box_enabled;
+  GtkWidget *label_disabled;
+  GtkWidget *stack;
   int preset_cnt;
   int preset_num[50];
   double daylight_wb[4];
@@ -113,18 +122,6 @@ int legacy_params(dt_iop_module_t *self, const void *const old_params, const int
   return 1;
 }
 
-static int is_leica_monochrom(dt_image_t *img)
-{
-  if(strncmp(img->exif_maker, "Leica Camera AG", 15) != 0) return 0;
-
-  gchar *tmp_model = g_ascii_strdown(img->exif_model, -1);
-
-  const int res = strstr(tmp_model, "monochrom") != NULL;
-  g_free(tmp_model);
-
-  return res;
-}
-
 static int ignore_missing_wb(dt_image_t *img)
 {
   // Ignore files that end with "-hdr.dng" since these are broken files we
@@ -158,6 +155,7 @@ static int ignore_missing_wb(dt_image_t *img)
   return FALSE;
 }
 
+
 const char *name()
 {
   return C_("modulename", "white balance");
@@ -166,7 +164,7 @@ const char *name()
 
 int groups()
 {
-  return IOP_GROUP_BASIC;
+  return dt_iop_get_group("white balance", IOP_GROUP_BASIC);
 }
 
 int flags()
@@ -409,7 +407,7 @@ static cmsCIEXYZ mul2xyz(dt_iop_module_t *self, const float coeffs[4])
   dt_iop_temperature_gui_data_t *g = (dt_iop_temperature_gui_data_t *)self->gui_data;
 
   double CAM[4];
-  for(int k = 0; k < 4; k++) coeffs[k] > 0.0f ? CAM[k] = 1.0 / coeffs[k] : 0.0f;
+  for(int k = 0; k < 4; k++) CAM[k] = coeffs[k] > 0.0f ? 1.0 / coeffs[k] : 0.0f;
 
   double XYZ[3];
   for(int k = 0; k < 3; k++)
@@ -705,6 +703,13 @@ void commit_params(struct dt_iop_module_t *self, dt_iop_params_t *p1, dt_dev_pix
 {
   dt_iop_temperature_params_t *p = (dt_iop_temperature_params_t *)p1;
   dt_iop_temperature_data_t *d = (dt_iop_temperature_data_t *)piece->data;
+
+  if(self->hide_enable_button)
+  {
+    piece->enabled = 0;
+    return;
+  }
+
   for(int k = 0; k < 4; k++) d->coeffs[k] = p->coeffs[k];
 
   // 4Bayer images not implemented in OpenCL yet
@@ -726,13 +731,21 @@ void cleanup_pipe(struct dt_iop_module_t *self, dt_dev_pixelpipe_t *pipe, dt_dev
 void gui_update(struct dt_iop_module_t *self)
 {
   dt_iop_module_t *module = (dt_iop_module_t *)self;
+  dt_iop_temperature_gui_data_t *g = (dt_iop_temperature_gui_data_t *)self->gui_data;
+  dt_iop_temperature_params_t *p = (dt_iop_temperature_params_t *)module->params;
+  dt_iop_temperature_params_t *fp = (dt_iop_temperature_params_t *)module->default_params;
+
+  if(self->hide_enable_button)
+  {
+    gtk_stack_set_visible_child_name(GTK_STACK(g->stack), "disabled");
+    return;
+  }
+  gtk_stack_set_visible_child_name(GTK_STACK(g->stack), "enabled");
+
   self->request_color_pick = DT_REQUEST_COLORPICK_OFF;
   self->color_picker_box[0] = self->color_picker_box[1] = .25f;
   self->color_picker_box[2] = self->color_picker_box[3] = .75f;
   self->color_picker_point[0] = self->color_picker_point[1] = 0.5f;
-  dt_iop_temperature_gui_data_t *g = (dt_iop_temperature_gui_data_t *)self->gui_data;
-  dt_iop_temperature_params_t *p = (dt_iop_temperature_params_t *)module->params;
-  dt_iop_temperature_params_t *fp = (dt_iop_temperature_params_t *)module->default_params;
 
   double TempK, tint;
   mul2temp(self, p->coeffs, &TempK, &tint);
@@ -762,7 +775,7 @@ void gui_update(struct dt_iop_module_t *self)
     for(int i = 0; i < wb_preset_count; i++)
     {
       if(g->preset_cnt >= 50) break;
-      if(!strcmp(wb_preset[i].make, self->dev->image_storage.camera_maker) 
+      if(!strcmp(wb_preset[i].make, self->dev->image_storage.camera_maker)
          && !strcmp(wb_preset[i].model, self->dev->image_storage.camera_model))
       {
         if(!wb_name || strcmp(wb_name, wb_preset[i].name))
@@ -799,7 +812,7 @@ void gui_update(struct dt_iop_module_t *self)
     for(int j = DT_IOP_NUM_OF_STD_TEMP_PRESETS; !found && (j < g->preset_cnt); j++)
     {
       // look through all variants of this preset, with different tuning
-      for(int i = g->preset_num[j]; !found && (i < wb_preset_count) 
+      for(int i = g->preset_num[j]; !found && (i < wb_preset_count)
                                     && !strcmp(wb_preset[i].make, self->dev->image_storage.camera_maker)
                                     && !strcmp(wb_preset[i].model, self->dev->image_storage.camera_model)
                                     && !strcmp(wb_preset[i].name, wb_preset[g->preset_num[j]].name);
@@ -936,10 +949,23 @@ void reload_defaults(dt_iop_module_t *module)
   // we might be called from presets update infrastructure => there is no image
   if(!module->dev) goto end;
 
+  const int is_raw = dt_image_is_raw(&module->dev->image_storage);
+
+  module->default_enabled = 0;
+  module->hide_enable_button = 0;
+
+  // White balance module doesn't need to be enabled for monochrome raws (like
+  // for leica monochrom cameras). prepare_matrices is a noop as well, as there
+  // isn't a color matrix, so we can skip that as well.
+  if(is_raw && dt_image_is_monochrome(&(module->dev->image_storage)))
+  {
+    module->hide_enable_button = 1;
+    goto gui;
+  }
   if(module->gui_data) prepare_matrices(module);
 
   /* check if file is raw / hdr */
-  if(dt_image_is_raw(&module->dev->image_storage))
+  if(is_raw)
   {
     // raw images need wb:
     module->default_enabled = 1;
@@ -963,20 +989,12 @@ void reload_defaults(dt_iop_module_t *module)
     }
     else
     {
-      if(!is_leica_monochrom(&(module->dev->image_storage)))
+      if(!ignore_missing_wb(&(module->dev->image_storage)))
       {
-        if(!ignore_missing_wb(&(module->dev->image_storage)))
-        {
-          dt_control_log(_("failed to read camera white balance information from `%s'!"),
-                         module->dev->image_storage.filename);
-          fprintf(stderr, "[temperature] failed to read camera white balance information from `%s'!\n",
-                  module->dev->image_storage.filename);
-        }
-      }
-      else
-      {
-        // nop white balance is valid for monochrome sraws (like the leica monochrom produces)
-        goto gui;
+        dt_control_log(_("failed to read camera white balance information from `%s'!"),
+                       module->dev->image_storage.filename);
+        fprintf(stderr, "[temperature] failed to read camera white balance information from `%s'!\n",
+                module->dev->image_storage.filename);
       }
     }
 
@@ -1048,7 +1066,7 @@ gui:
       // we're normalizing that to be D65
       for(int i = 0; i < wb_preset_count; i++)
       {
-        if(!strcmp(wb_preset[i].make, module->dev->image_storage.camera_maker) 
+        if(!strcmp(wb_preset[i].make, module->dev->image_storage.camera_maker)
            && !strcmp(wb_preset[i].model, module->dev->image_storage.camera_model)
            && !strcmp(wb_preset[i].name, Daylight) && wb_preset[i].tuning == 0)
         {
@@ -1064,11 +1082,13 @@ gui:
     dt_bauhaus_slider_set_default(g->scale_k, TempK);
     dt_bauhaus_slider_set_default(g->scale_tint, tint);
 
+#if COLORED_SLIDERS
     const float neutral_stop_tint = (tint - DT_IOP_LOWEST_TINT) / (DT_IOP_HIGHEST_TINT - DT_IOP_LOWEST_TINT);
     dt_bauhaus_slider_clear_stops(g->scale_tint);
     dt_bauhaus_slider_set_stop(g->scale_tint, 0.0, 1.0, 0.0, 1.0);
     dt_bauhaus_slider_set_stop(g->scale_tint, neutral_stop_tint, 1.0, 1.0, 1.0);
     dt_bauhaus_slider_set_stop(g->scale_tint, 1.0, 0.0, 1.0, 0.0);
+#endif
   }
 
 end:
@@ -1091,7 +1111,7 @@ void init(dt_iop_module_t *module)
 {
   module->params = calloc(1, sizeof(dt_iop_temperature_params_t));
   module->default_params = calloc(1, sizeof(dt_iop_temperature_params_t));
-  module->priority = 44; // module order created by iop_dependencies.py, do not edit!
+  module->priority = 42; // module order created by iop_dependencies.py, do not edit!
   module->params_size = sizeof(dt_iop_temperature_params_t);
   module->gui_data = NULL;
 }
@@ -1137,8 +1157,8 @@ static gboolean draw(GtkWidget *widget, cairo_t *cr, dt_iop_module_t *self)
   if(darktable.gui->reset) return FALSE;
   if(self->picked_color_max[0] < self->picked_color_min[0]) return FALSE;
   if(self->request_color_pick == DT_REQUEST_COLORPICK_OFF) return FALSE;
-  static float old[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
   const float *grayrgb = self->picked_color;
+  //test the newly picked color: if the same as the last, do not process further
   if(grayrgb[0] == old[0] && grayrgb[1] == old[1] && grayrgb[2] == old[2] && grayrgb[3] == old[3]) return FALSE;
   for(int k = 0; k < 4; k++) old[k] = grayrgb[k];
   dt_iop_temperature_params_t *p = (dt_iop_temperature_params_t *)self->params;
@@ -1243,7 +1263,10 @@ static void apply_preset(dt_iop_module_t *self)
       for(int k = 0; k < 4; k++) p->coeffs[k] = g->daylight_wb[k];
       break;
     case 2: // spot wb, expose callback will set p->coeffs.
-      for(int k = 0; k < 4; k++) p->coeffs[k] = fp->coeffs[k];
+
+      //reset previously stored color picker information
+      for(int k = 0; k < 4; k++) old[k] = 0.0f;
+
       dt_iop_request_focus(self);
       self->request_color_pick = DT_REQUEST_COLORPICK_MODULE;
 
@@ -1256,7 +1279,7 @@ static void apply_preset(dt_iop_module_t *self)
     {
       gboolean found = FALSE;
       // look through all variants of this preset, with different tuning
-      for(int i = g->preset_num[pos]; (i < wb_preset_count) 
+      for(int i = g->preset_num[pos]; (i < wb_preset_count)
                                       && !strcmp(wb_preset[i].make, self->dev->image_storage.camera_maker)
                                       && !strcmp(wb_preset[i].model, self->dev->image_storage.camera_model)
                                       && !strcmp(wb_preset[i].name, wb_preset[g->preset_num[pos]].name);
@@ -1363,8 +1386,15 @@ void gui_init(struct dt_iop_module_t *self)
   dt_iop_temperature_params_t *p = (dt_iop_temperature_params_t *)self->default_params;
 
   self->request_color_pick = DT_REQUEST_COLORPICK_OFF;
-  self->widget = gtk_box_new(GTK_ORIENTATION_VERTICAL, DT_BAUHAUS_SPACE);
+  self->widget = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+  dt_gui_add_help_link(self->widget, dt_get_help_url(self->op));
   g_signal_connect(G_OBJECT(self->widget), "draw", G_CALLBACK(draw), self);
+
+  g->stack = gtk_stack_new();
+  gtk_stack_set_homogeneous(GTK_STACK(g->stack), FALSE);
+  gtk_box_pack_start(GTK_BOX(self->widget), g->stack, TRUE, TRUE, 0);
+
+  g->box_enabled = gtk_box_new(GTK_ORIENTATION_VERTICAL, DT_BAUHAUS_SPACE);
 
   for(int k = 0; k < 4; k++) g->daylight_wb[k] = 1.0;
   g->scale_tint
@@ -1378,6 +1408,7 @@ void gui_init(struct dt_iop_module_t *self)
   g->scale_b = dt_bauhaus_slider_new_with_range(self, 0.0, 8.0, .001, p->coeffs[2], 3);
   g->scale_g2 = dt_bauhaus_slider_new_with_range(self, 0.0, 8.0, .001, p->coeffs[3], 3);
 
+#if COLORED_SLIDERS
   // reflect actual black body colors for the temperature slider
   const double temp_step = (double)(DT_IOP_HIGHEST_TEMPERATURE - DT_IOP_LOWEST_TEMPERATURE) / (DT_BAUHAUS_SLIDER_MAX_STOPS - 1.0);
   for(int i = 0; i < DT_BAUHAUS_SLIDER_MAX_STOPS; i++)
@@ -1400,25 +1431,26 @@ void gui_init(struct dt_iop_module_t *self)
   dt_bauhaus_slider_set_stop(g->scale_b, 1.0, 0.0, 0.0, 1.0);
   dt_bauhaus_slider_set_stop(g->scale_g2, 0.0, 0.0, 0.0, 0.0);
   dt_bauhaus_slider_set_stop(g->scale_g2, 1.0, 0.0, 1.0, 0.0);
+#endif
 
   dt_bauhaus_slider_set_format(g->scale_k, "%.0fK");
   dt_bauhaus_widget_set_label(g->scale_tint, NULL, _("tint"));
   dt_bauhaus_widget_set_label(g->scale_k, NULL, _("temperature"));
 
-  gtk_box_pack_start(GTK_BOX(self->widget), g->scale_tint, TRUE, TRUE, 0);
-  gtk_box_pack_start(GTK_BOX(self->widget), g->scale_k, TRUE, TRUE, 0);
+  gtk_box_pack_start(GTK_BOX(g->box_enabled), g->scale_tint, TRUE, TRUE, 0);
+  gtk_box_pack_start(GTK_BOX(g->box_enabled), g->scale_k, TRUE, TRUE, 0);
   gtk_box_pack_start(GTK_BOX(g->coeff_widgets), g->scale_r, TRUE, TRUE, 0);
   gtk_box_pack_start(GTK_BOX(g->coeff_widgets), g->scale_g, TRUE, TRUE, 0);
   gtk_box_pack_start(GTK_BOX(g->coeff_widgets), g->scale_b, TRUE, TRUE, 0);
   gtk_box_pack_start(GTK_BOX(g->coeff_widgets), g->scale_g2, TRUE, TRUE, 0);
-  gtk_box_pack_start(GTK_BOX(self->widget), g->coeff_widgets, TRUE, TRUE, 0);
+  gtk_box_pack_start(GTK_BOX(g->box_enabled), g->coeff_widgets, TRUE, TRUE, 0);
   gtk_widget_set_no_show_all(g->scale_g2, TRUE);
 
   gui_sliders_update(self);
 
   g->presets = dt_bauhaus_combobox_new(self);
   dt_bauhaus_widget_set_label(g->presets, NULL, _("preset"));
-  gtk_box_pack_start(GTK_BOX(self->widget), g->presets, TRUE, TRUE, 0);
+  gtk_box_pack_start(GTK_BOX(g->box_enabled), g->presets, TRUE, TRUE, 0);
   gtk_widget_set_tooltip_text(g->presets, _("choose white balance preset from camera"));
 
   g->finetune = dt_bauhaus_slider_new_with_range(self, -9.0, 9.0, 1.0, 0.0, 0);
@@ -1426,8 +1458,19 @@ void gui_init(struct dt_iop_module_t *self)
   dt_bauhaus_slider_set_format(g->finetune, _("%.0f mired"));
   // initially doesn't have fine tuning stuff (camera wb)
   gtk_widget_set_sensitive(g->finetune, FALSE);
-  gtk_box_pack_start(GTK_BOX(self->widget), g->finetune, TRUE, TRUE, 0);
+  gtk_box_pack_start(GTK_BOX(g->box_enabled), g->finetune, TRUE, TRUE, 0);
   gtk_widget_set_tooltip_text(g->finetune, _("fine tune white balance preset"));
+
+  gtk_widget_show_all(g->box_enabled);
+  gtk_stack_add_named(GTK_STACK(g->stack), g->box_enabled, "enabled");
+
+  g->label_disabled = gtk_label_new(_("white balance disabled for camera"));
+  gtk_widget_set_halign(g->label_disabled, GTK_ALIGN_START);
+
+  gtk_widget_show_all(g->label_disabled);
+  gtk_stack_add_named(GTK_STACK(g->stack), g->label_disabled, "disabled");
+
+  gtk_stack_set_visible_child_name(GTK_STACK(g->stack), self->hide_enable_button ? "disabled" : "enabled");
 
   self->gui_update(self);
 

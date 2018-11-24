@@ -1,6 +1,6 @@
 /*
     This file is part of darktable,
-    copyright (c) 2017 Heiko Bauke.
+    copyright (c) 2017-2018 Heiko Bauke.
 
     darktable is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -38,8 +38,10 @@
 #include "bauhaus/bauhaus.h"
 #include "common/darktable.h"
 #include "develop/imageop.h"
+#include "develop/imageop_math.h"
 #include "gui/gtk.h"
 #include "iop/iop_api.h"
+#include "common/iop_group.h"
 
 #include <float.h>
 #include <gtk/gtk.h>
@@ -79,6 +81,7 @@ typedef struct dt_iop_hazeremoval_global_data_t
 {
 } dt_iop_hazeremoval_global_data_t;
 
+
 const char *name()
 {
   return _("haze removal");
@@ -91,7 +94,7 @@ int flags()
 
 int groups()
 {
-  return IOP_GROUP_CORRECT;
+  return dt_iop_get_group("haze removal", IOP_GROUP_CORRECT);
 }
 
 void init_pipe(struct dt_iop_module_t *self, dt_dev_pixelpipe_t *pipe, dt_dev_pixelpipe_iop_t *piece)
@@ -120,7 +123,7 @@ void init(dt_iop_module_t *self)
   self->params = calloc(1, sizeof(dt_iop_hazeremoval_params_t));
   self->default_params = calloc(1, sizeof(dt_iop_hazeremoval_params_t));
   self->default_enabled = 0;
-  self->priority = 338; // module order created by iop_dependencies.py, do not edit!
+  self->priority = 357; // module order created by iop_dependencies.py, do not edit!
   self->params_size = sizeof(dt_iop_hazeremoval_params_t);
   self->gui_data = NULL;
   dt_iop_hazeremoval_params_t tmp = (dt_iop_hazeremoval_params_t){ 0.5f, 0.25f };
@@ -180,14 +183,17 @@ void gui_init(dt_iop_module_t *self)
   g->hash = 0;
 
   self->widget = gtk_box_new(GTK_ORIENTATION_VERTICAL, DT_BAUHAUS_SPACE);
+  dt_gui_add_help_link(self->widget, dt_get_help_url(self->op));
 
   g->strength = dt_bauhaus_slider_new_with_range(self, -1, 1, 0.01, p->strength, 2);
   dt_bauhaus_widget_set_label(g->strength, NULL, _("strength"));
+  gtk_widget_set_tooltip_text(g->strength, _("amount of haze reduction"));
   gtk_box_pack_start(GTK_BOX(self->widget), GTK_WIDGET(g->strength), TRUE, TRUE, 0);
   g_signal_connect(G_OBJECT(g->strength), "value-changed", G_CALLBACK(strength_callback), self);
 
   g->distance = dt_bauhaus_slider_new_with_range(self, 0, 1, 0.005, p->distance, 3);
   dt_bauhaus_widget_set_label(g->distance, NULL, _("distance"));
+  gtk_widget_set_tooltip_text(g->distance, _("limit haze removal up to a specific spatial depth"));
   gtk_box_pack_start(GTK_BOX(self->widget), GTK_WIDGET(g->distance), TRUE, TRUE, 0);
   g_signal_connect(G_OBJECT(g->distance), "value-changed", G_CALLBACK(distance_callback), self);
 }
@@ -309,7 +315,7 @@ static inline void box_mean_1d(int N, const float *x, float *y, size_t stride_y,
 }
 
 // calculate the two-dimensional moving average over a box of size (2*w+1) x (2*w+1)
-// does the calculation in-place if input and ouput images are identical
+// does the calculation in-place if input and output images are identical
 // this function is always called from a OpenMP thread, thus no parallelization
 static void box_mean(gray_image img1, gray_image img2, int w)
 {
@@ -356,7 +362,7 @@ static inline void box_max_1d(int N, const float *x, float *y, size_t stride_y, 
 }
 
 // calculate the two-dimensional moving maximum over a box of size (2*w+1) x (2*w+1)
-// does the calculation in-place if input and ouput images are identical
+// does the calculation in-place if input and output images are identical
 static void box_max(const gray_image img1, const gray_image img2, const int w)
 {
   gray_image img2_bak;
@@ -427,7 +433,7 @@ static inline void box_min_1d(int N, const float *x, float *y, size_t stride_y, 
 }
 
 // calculate the two-dimensional moving minimum over a box of size (2*w+1) x (2*w+1)
-// does the calculation in-place if input and ouput images are identical
+// does the calculation in-place if input and output images are identical
 static void box_min(const gray_image img1, const gray_image img2, const int w)
 {
   gray_image img2_bak;
@@ -521,6 +527,8 @@ static void transition_map(const const_rgb_image img1, const gray_image img2, co
 static void guided_filter_tiling(const_rgb_image imgg, gray_image img, gray_image img_out, tile target, int w,
                                  float eps)
 {
+  // to process the current tile also input data from the borders
+  // (of size 2*w) of the neighbouring tiles is required
   const tile source = { max_i(target.left - 2 * w, 0), min_i(target.right + 2 * w, imgg.width),
                         max_i(target.lower - 2 * w, 0), min_i(target.upper + 2 * w, imgg.height) };
   const int width = source.right - source.left;
@@ -550,13 +558,12 @@ static void guided_filter_tiling(const_rgb_image imgg, gray_image img, gray_imag
   gray_image cov_imgg_img_r = new_gray_image(width, height);
   gray_image cov_imgg_img_g = new_gray_image(width, height);
   gray_image cov_imgg_img_b = new_gray_image(width, height);
-  gray_image var_imgg_rr, var_imgg_rg, var_imgg_rb, var_imgg_gg, var_imgg_gb, var_imgg_bb;
-  var_imgg_rr = new_gray_image(width, height);
-  var_imgg_gg = new_gray_image(width, height);
-  var_imgg_bb = new_gray_image(width, height);
-  var_imgg_rg = new_gray_image(width, height);
-  var_imgg_rb = new_gray_image(width, height);
-  var_imgg_gb = new_gray_image(width, height);
+  gray_image var_imgg_rr = new_gray_image(width, height);
+  gray_image var_imgg_gg = new_gray_image(width, height);
+  gray_image var_imgg_bb = new_gray_image(width, height);
+  gray_image var_imgg_rg = new_gray_image(width, height);
+  gray_image var_imgg_rb = new_gray_image(width, height);
+  gray_image var_imgg_gb = new_gray_image(width, height);
   for(int j_imgg = source.lower; j_imgg < source.upper; j_imgg++)
   {
     size_t k = (size_t)(j_imgg - source.lower) * width;
@@ -652,11 +659,16 @@ static void guided_filter_tiling(const_rgb_image imgg, gray_image img, gray_imag
   box_mean(a_g, a_g, w);
   box_mean(a_b, a_b, w);
   box_mean(b, b, w);
-  for(int j_imgg = source.lower; j_imgg < source.upper; j_imgg++)
+  // finally calculate results for the curent tile
+  for(int j_imgg = target.lower; j_imgg < target.upper; j_imgg++)
   {
-    size_t k = (size_t)(j_imgg - source.lower) * width;
-    size_t l = source.left + (size_t)j_imgg * imgg.width;
-    for(int i_imgg = source.left; i_imgg < source.right; i_imgg++, k++, l++)
+    // index of the left most target pixel in the current row
+    size_t l = target.left + (size_t)j_imgg * imgg.width;
+    // index of the left most source pixel in the curent row of the
+    // smaller auxiliary gray-scale images a_r, a_g, a_b, and b
+    // excluding boundary data from neighboring tiles
+    size_t k = (target.left - source.left) + (size_t)(j_imgg - source.lower) * width;
+    for(int i_imgg = target.left; i_imgg < target.right; i_imgg++, k++, l++)
     {
       const float *pixel = imgg.data + l * imgg.stride;
       img_out.data[l] = a_r.data[k] * pixel[0] + a_g.data[k] * pixel[1] + a_b.data[k] * pixel[2] + b.data[k];
@@ -736,8 +748,8 @@ void quick_select(float *first, float *nth, float *last)
 // reduced by the factor exp(-1)
 static float ambient_light(const const_rgb_image img, int w1, rgb_pixel *pA0)
 {
-  const float dark_channel_quantil = 0.95f; // quantil for determing the most hazy pixels
-  const float bright_quantil = 0.95f; // quantil for determing the brightest pixels among the most hazy pixels
+  const float dark_channel_quantil = 0.95f; // quantil for determining the most hazy pixels
+  const float bright_quantil = 0.95f; // quantil for determining the brightest pixels among the most hazy pixels
   int width = img.width;
   int height = img.height;
   const size_t size = (size_t)width * height;
@@ -747,6 +759,7 @@ static float ambient_light(const const_rgb_image img, int w1, rgb_pixel *pA0)
   // determine the brightest pixels among the most hazy pixels
   gray_image bright_hazy = new_gray_image(width, height);
   copy_gray_image(dark_ch, bright_hazy);
+  // first determine the most hazy pixels
   size_t p = size * dark_channel_quantil;
   quick_select(bright_hazy.data, bright_hazy.data + p, bright_hazy.data + size);
   const float crit_haze_level = bright_hazy.data[p];
@@ -782,14 +795,23 @@ static float ambient_light(const const_rgb_image img, int w1, rgb_pixel *pA0)
       N_bright_hazy++;
     }
   }
-  (*pA0)[0] = A0_r / N_bright_hazy;
-  (*pA0)[1] = A0_g / N_bright_hazy;
-  (*pA0)[2] = A0_b / N_bright_hazy;
+  if(N_bright_hazy > 0)
+  {
+    A0_r /= N_bright_hazy;
+    A0_g /= N_bright_hazy;
+    A0_b /= N_bright_hazy;
+  }
+  (*pA0)[0] = A0_r;
+  (*pA0)[1] = A0_g;
+  (*pA0)[2] = A0_b;
   free_gray_image(&dark_ch);
+  // for almost haze free images it may happen that crit_haze_level=0, this means
+  // there is a very large image depth, in this case a large number is returned, that
+  // is small enough to avoid overflow in later processing
   // the critical haze level is at dark_channel_quantil (not 100%) to be insensitive
-  // to extrime outliners, compensate for that by some factor slighly larger than
+  // to extreme outliners, compensate for that by some factor slightly larger than
   // unity when calculating the maximal image depth
-  return -1.125f * logf(crit_haze_level); // return the maximal depth
+  return crit_haze_level > 0 ? -1.125f * logf(crit_haze_level) : logf(FLT_MAX) / 2; // return the maximal depth
 }
 
 void process(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, const void *const ivoid,
@@ -802,7 +824,7 @@ void process(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, const 
   const int width = roi_in->width;
   const int height = roi_in->height;
   const size_t size = (size_t)width * height;
-  const int w1 = 6; // window size (positive integer) for determing the dark channel and the transition map
+  const int w1 = 6; // window size (positive integer) for determining the dark channel and the transition map
   const int w2 = 9; // window size (positive integer) for the guided filter
 
   // module parameters
@@ -888,7 +910,8 @@ void process(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, const 
   }
 
   // finally, calculate the haze-free image
-  const float t_min = expf(-distance * distance_max); // minimum allowed value for transition map
+  const float t_min
+      = fmaxf(expf(-distance * distance_max), 1.f / 1024); // minimum allowed value for transition map
   const float *const c_A0 = A0;
 #ifdef _OPENMP
 #pragma omp parallel for default(none) schedule(static)
@@ -905,6 +928,9 @@ void process(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, const 
 
   free_gray_image(&trans_map);
   free_gray_image(&trans_map_filtered);
+
+  if(piece->pipe->mask_display & DT_DEV_PIXELPIPE_DISPLAY_MASK)
+    dt_iop_alpha_copy(ivoid, ovoid, roi_out->width, roi_out->height);
 }
 
 // modelines: These editor modelines have been set for all relevant files by tools/update_modelines.sh

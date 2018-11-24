@@ -15,16 +15,48 @@ class CameraSupportState
 
   def initialize(opts={})
     @samplesdir = opts[:samplesdir]
+    @basedir=Dir.pwd
+    opts[:ref] ||= 'HEAD'
+    @submodules=get_submodules(opts[:ref])
     @sources = Hash[
       SOURCE_FILES.map do |name, file|
-        if opts[:ref]
-          [name, IO.popen("git show #{opts[:ref]}:#{file}")]
-        else
-          [name, File.open(File.expand_path("../"+file, File.dirname(__FILE__)))]
-        end
+        [name, file_content(file, opts[:ref])]
       end
     ]
     process_files
+  end
+
+  def file_content(filename, rev)
+    submodule,submodulerev=get_submodule(filename)
+    goodname = filename.dup
+    if submodule
+      Dir.chdir(submodule)
+      goodname.gsub!("#{submodule}/",'')
+      rev=submodulerev
+    end
+    ret=IO.popen("git show #{rev}:#{goodname}")
+    if submodule
+      Dir.chdir(@basedir)
+    end
+    ret
+  end
+
+  def get_submodules(rev)
+    ret={}
+    IO.popen("git ls-tree --full-tree -z -r #{rev}") do |fh|
+      fh.each_line("\0") do |line|
+        # 100644 blob bc16048078e48ccfa6a1aaa539fa295e7d9f2601    tools/wb_presets_common.rb
+        mo=/\A(?<mode>\d+) (?<type>\S+) (?<hash>\S+)\t(?<path>\S+)\0\z/.match(line)
+        if mo and (mo[:type] == 'commit')
+          ret[mo[:path]]=mo[:hash]
+        end
+      end
+    end
+    ret
+  end
+
+  def get_submodule(filename)
+    submodule=@submodules.select {|dir,hash| filename.start_with?(dir) }.first
   end
 
   def get_maker_model(file)
@@ -191,18 +223,18 @@ class CameraSupportState
   end
 
   def matrix_listing
-    puts "<table><tbody>"
+    puts "<!-- valid as of #{Time.now.strftime("%Y/%m/%d")}, #{IO.popen("git describe").readlines[0]} -->"
+    puts "<table class=\"smalltext altrows u-full-width\">"
 
-    counts = [0, 0, 0, 0, 0]
+    counts = [0, 0, 0, 0]
     clist = ""
     i = 1
     camera_list.each do |camera, al|
       counts[0] += 1
       i += 1
-      line_class = i%2 == 0 ? "even" : "odd"
-      clist << "  <tr class=\"#{line_class}\">"
+      clist << "  <tr>"
       clist << "<td>#{al}</td>"
-      [@samples_alias_cameras[al], @presets_cameras[camera],
+      [@presets_cameras[camera],
        @noiseprofiles_cameras[camera], @colormatrices_cameras[camera]].each_with_index do |value, num|
         counts[num+1] += 1 if value
         value = value ? "Yes" : "<strong>NO</strong>"
@@ -211,15 +243,15 @@ class CameraSupportState
       clist << "</tr>\n"
     end
 
-    puts "  <tr class=\"odd\">"
-    ["Camera", "Raw Sample", "WB Presets", "Noise Profile", "Custom Matrix"].each_with_index do |name, i|
+    puts "  <thead><tr>"
+    ["Camera", "WB Presets", "Noise Profile", "Custom Matrix"].each_with_index do |name, i|
       $stdout.write "    <th><strong>#{name}</strong><br/>"
       $stdout.write "#{counts[i]} (#{(counts[i].to_f/counts[0].to_f*100).to_i}%)"
       $stdout.write "</th>\n"
     end
-    puts "  </tr>"
+    puts "  </tr></thead>"
     $stdout.write clist
-    puts "</tbody></table>"
+    puts "</table>"
   end
 
   def camera_list
@@ -286,10 +318,10 @@ class CameraSupportState
       puts
     end
 
-    print_list "Base Support:", new_basics
-    print_list "White Balance Presets:", new_presets
-    print_list "Noise Profiles:", new_profiles
-    print_list "Custom Color matrices:", new_matrices
+    print_list "### Base Support", new_basics
+    print_list "### White Balance Presets", new_presets
+    print_list "### Noise Profiles", new_profiles
+    print_list "### Custom Color matrices", new_matrices
   end
 end #class CameraSupportState
 

@@ -32,6 +32,7 @@
 #include "gui/draw.h"
 #include "gui/gtk.h"
 #include "iop/iop_api.h"
+#include "common/iop_group.h"
 #include <assert.h>
 #include <ctype.h>
 #include <gtk/gtk.h>
@@ -127,6 +128,7 @@ typedef struct dt_iop_lensfun_data_t
   gboolean do_nan_checks;
 } dt_iop_lensfun_data_t;
 
+
 const char *name()
 {
   return _("lens correction");
@@ -134,7 +136,7 @@ const char *name()
 
 int groups()
 {
-  return IOP_GROUP_CORRECT;
+  return dt_iop_get_group("lens correction", IOP_GROUP_CORRECT);
 }
 
 int operation_tags()
@@ -1079,12 +1081,14 @@ void init_global(dt_iop_module_so_t *module)
   if(lf_db_load(dt_iop_lensfun_db) != LF_NO_ERROR)
 #endif
   {
-    char path[PATH_MAX] = { 0 };
-    dt_loc_get_datadir(path, sizeof(path));
-    char *c = path + strlen(path);
-    for(; c > path && *c != G_DIR_SEPARATOR; c--)
-      ;
-    *c = '\0';
+    char datadir[PATH_MAX] = { 0 };
+    dt_loc_get_datadir(datadir, sizeof(datadir));
+
+    // get parent directory
+    GFile *file = g_file_parse_name(datadir);
+    gchar *path = g_file_get_path(g_file_get_parent(file));
+    g_object_unref(file);
+
 #ifdef LF_MAX_DATABASE_VERSION
     g_free(dt_iop_lensfun_db->HomeDataDir);
     dt_iop_lensfun_db->HomeDataDir = g_build_filename(path, "lensfun", "version_" STR(LF_MAX_DATABASE_VERSION), NULL);
@@ -1099,6 +1103,8 @@ void init_global(dt_iop_module_so_t *module)
 #ifdef LF_MAX_DATABASE_VERSION
     }
 #endif
+
+    g_free(path);
   }
 }
 
@@ -1133,6 +1139,8 @@ void reload_defaults(dt_iop_module_t *module)
   tmp.tca_r = 1.0;
   tmp.tca_b = 1.0;
   tmp.modified = 0;
+
+  if(dt_image_is_monochrome(img)) tmp.modify_flags &= ~LF_MODIFY_TCA;
 
   // init crop from db:
   char model[100]; // truncate often complex descriptions.
@@ -1235,7 +1243,7 @@ void init(dt_iop_module_t *module)
   module->default_enabled = 0;
   module->params_size = sizeof(dt_iop_lensfun_params_t);
   module->gui_data = NULL;
-  module->priority = 191; // module order created by iop_dependencies.py, do not edit!
+  module->priority = 199; // module order created by iop_dependencies.py, do not edit!
 }
 
 void cleanup(dt_iop_module_t *module)
@@ -1702,7 +1710,7 @@ static void lens_set(dt_iop_module_t *self, const lfLens *lens)
                          "focal range:\t%s\n"
                          "aperture:\t\t%s\n"
                          "crop factor:\t%.1f\n"
-                         "type:\t\t\t%s\n"
+                         "type:\t\t%s\n"
                          "mounts:\t\t%s"),
                        maker ? maker : "?", model ? model : "?", focal, aperture, lens->CropFactor,
                        lf_get_lens_type_desc(lens->Type, NULL), mounts);
@@ -2126,6 +2134,7 @@ void gui_init(struct dt_iop_module_t *self)
   GtkWidget *button;
 
   self->widget = gtk_box_new(GTK_ORIENTATION_VERTICAL, DT_BAUHAUS_SPACE);
+  dt_gui_add_help_link(self->widget, dt_get_help_url(self->op));
 
   // camera selector
   GtkWidget *hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
@@ -2134,7 +2143,7 @@ void gui_init(struct dt_iop_module_t *self)
   gtk_label_set_ellipsize(GTK_LABEL(gtk_bin_get_child(GTK_BIN(g->camera_model))), PANGO_ELLIPSIZE_END);
   g_signal_connect(G_OBJECT(g->camera_model), "clicked", G_CALLBACK(camera_menusearch_clicked), self);
   gtk_box_pack_start(GTK_BOX(hbox), GTK_WIDGET(g->camera_model), TRUE, TRUE, 0);
-  button = dtgtk_button_new(dtgtk_cairo_paint_solid_triangle, CPF_STYLE_FLAT | CPF_DIRECTION_DOWN);
+  button = dtgtk_button_new(dtgtk_cairo_paint_solid_triangle, CPF_STYLE_FLAT | CPF_DIRECTION_DOWN, NULL);
   g->find_camera_button = button;
   gtk_box_pack_start(GTK_BOX(hbox), button, FALSE, FALSE, 0);
   gtk_widget_set_tooltip_text(button, _("find camera"));
@@ -2148,7 +2157,7 @@ void gui_init(struct dt_iop_module_t *self)
   gtk_label_set_ellipsize(GTK_LABEL(gtk_bin_get_child(GTK_BIN(g->lens_model))), PANGO_ELLIPSIZE_END);
   g_signal_connect(G_OBJECT(g->lens_model), "clicked", G_CALLBACK(lens_menusearch_clicked), self);
   gtk_box_pack_start(GTK_BOX(hbox), GTK_WIDGET(g->lens_model), TRUE, TRUE, 0);
-  button = dtgtk_button_new(dtgtk_cairo_paint_solid_triangle, CPF_STYLE_FLAT | CPF_DIRECTION_DOWN);
+  button = dtgtk_button_new(dtgtk_cairo_paint_solid_triangle, CPF_STYLE_FLAT | CPF_DIRECTION_DOWN, NULL);
   g->find_lens_button = GTK_WIDGET(button);
   gtk_box_pack_start(GTK_BOX(hbox), button, FALSE, FALSE, 0);
   gtk_widget_set_tooltip_text(button, _("find lens"));
@@ -2220,7 +2229,7 @@ void gui_init(struct dt_iop_module_t *self)
   g_signal_connect(G_OBJECT(g->scale), "value-changed", G_CALLBACK(scale_changed), self);
   g_signal_connect(G_OBJECT(g->scale), "quad-pressed", G_CALLBACK(autoscale_pressed), self);
   gtk_box_pack_start(GTK_BOX(self->widget), g->scale, TRUE, TRUE, 0);
-  dt_bauhaus_widget_set_quad_paint(g->scale, dtgtk_cairo_paint_refresh, 0);
+  dt_bauhaus_widget_set_quad_paint(g->scale, dtgtk_cairo_paint_refresh, 0, NULL);
 
   // reverse direction
   g->reverse = dt_bauhaus_combobox_new(self);

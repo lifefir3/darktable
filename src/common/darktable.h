@@ -23,11 +23,14 @@
 #if defined __DragonFly__ || defined __FreeBSD__ || defined __NetBSD__ || defined __OpenBSD__
 #define _WITH_DPRINTF
 #define _WITH_GETLINE
-#elif !defined _XOPEN_SOURCE && !defined __WIN32__
+#elif !defined _XOPEN_SOURCE && !defined _WIN32
 #define _XOPEN_SOURCE 700 // for localtime_r and dprintf
 #endif
 
-#if defined __WIN32__
+// needs to be defined before any system header includes for control/conf.h to work in C++ code
+#define __STDC_FORMAT_MACROS
+
+#if defined _WIN32
 #include "win/win.h"
 #endif
 
@@ -38,7 +41,7 @@
 #include "common/dtpthread.h"
 #include "common/utility.h"
 #include <time.h>
-#ifdef __WIN32__
+#ifdef _WIN32
 #include "win/getrusage.h"
 #else
 #include <sys/resource.h>
@@ -82,7 +85,14 @@ typedef unsigned int u_int;
 #include "common/poison.h"
 #endif
 
-#define DT_MODULE_VERSION 17 // version of dt's module interface
+#include "common/usermanual_url.h"
+
+#define DT_MODULE_VERSION 18 // version of dt's module interface
+
+// version of current performance configuration version
+// if you want to run an updated version of the performance configuration later
+// bump this number and make sure you have an updated logic in dt_configure_performance()
+#define DT_CURRENT_PERFORMANCE_CONFIGURE_VERSION 1
 
 // every module has to define this:
 #ifdef _DEBUG
@@ -154,6 +164,7 @@ struct dt_imageio_t;
 struct dt_bauhaus_t;
 struct dt_undo_t;
 struct dt_colorspaces_t;
+struct dt_l10n_t;
 
 typedef enum dt_debug_thread_t
 {
@@ -213,12 +224,15 @@ typedef struct darktable_t
   struct dt_dbus_t *dbus;
   struct dt_undo_t *undo;
   struct dt_colorspaces_t *color_profiles;
+  struct dt_l10n_t *l10n;
   dt_pthread_mutex_t db_insert;
   dt_pthread_mutex_t plugin_threadsafe;
   dt_pthread_mutex_t capabilities_threadsafe;
+  dt_pthread_mutex_t exiv2_threadsafe;
   char *progname;
   char *datadir;
   char *plugindir;
+  char *localedir;
   char *tmpdir;
   char *configdir;
   char *cachedir;
@@ -241,7 +255,7 @@ void dt_print(dt_debug_thread_t thread, const char *msg, ...) __attribute__((for
 void dt_gettime_t(char *datetime, size_t datetime_len, time_t t);
 void dt_gettime(char *datetime, size_t datetime_len);
 void *dt_alloc_align(size_t alignment, size_t size);
-#ifdef __WIN32__
+#ifdef _WIN32
 void dt_free_align(void *mem);
 #else
 #define dt_free_align(A) free(A)
@@ -478,12 +492,6 @@ static inline int dt_get_num_atom_cores()
   }
 
   return hw_ncpu;
-#elif defined _WIN32
-
-  SYSTEM_INFO sysinfo;
-  GetSystemInfo(&sysinfo);
-  return sysinfo.dwNumberOfProcessors;
-
 #else
   return 0;
 #endif
@@ -526,7 +534,7 @@ static inline size_t dt_get_total_memory()
 #endif
 }
 
-void dt_configure_defaults();
+void dt_configure_performance();
 
 // helper function which loads whatever image_to_load points to: single image files or whole directories
 // it tells you if it was a single image or a directory in single_image (when it's not NULL)

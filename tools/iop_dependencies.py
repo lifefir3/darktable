@@ -122,11 +122,20 @@ def add_edges(gr):
   gr.add_edge(('flip', 'rotatepixels'))
   gr.add_edge(('flip', 'lens'))
   gr.add_edge(('flip', 'spots'))
+  gr.add_edge(('flip', 'retouch'))
   gr.add_edge(('flip', 'liquify'))
   gr.add_edge(('flip', 'ashift'))
-  
+
+  # clipping is a convolution operation and needs linear data to avoid messing-up edges
+  # therefore needs to go before any curve, gamma or contrast operation
+  gr.add_edge(('basecurve', 'clipping'))
+  gr.add_edge(('profile_gamma', 'clipping'))
+  gr.add_edge(('tonecurve', 'clipping'))
+  gr.add_edge(('graduatednd', 'clipping'))
+  gr.add_edge(('colisa', 'clipping'))
+
   # ashift wants a lens corrected image with straight lines.
-  # therefore lens shoucl come before and liquify should come after ashift
+  # therefore lens should come before and liquify should come after ashift
   gr.add_edge(('ashift', 'lens'))
   gr.add_edge(('liquify', 'ashift'))
 
@@ -238,8 +247,17 @@ def add_edges(gr):
   gr.add_edge(('borders', 'spots'))
   gr.add_edge(('clipping', 'spots'))
 
-  # liquify immediately after spot removal
+  # retouch as well:
+  gr.add_edge(('retouch', 'demosaic'))
+  gr.add_edge(('scalepixels', 'retouch'))
+  gr.add_edge(('rotatepixels', 'retouch'))
+  gr.add_edge(('lens', 'retouch'))
+  gr.add_edge(('borders', 'retouch'))
+  gr.add_edge(('clipping', 'retouch'))
+
+  # liquify immediately after spot removal / retouch
   gr.add_edge(('liquify', 'spots'))
+  gr.add_edge(('liquify', 'retouch'))
   gr.add_edge(('liquify', 'lens'))
   gr.add_edge(('rotatepixels', 'liquify'))
   gr.add_edge(('scalepixels', 'liquify'))
@@ -258,6 +276,7 @@ def add_edges(gr):
   gr.add_edge(('colorcorrection', 'tonecurve'))
   gr.add_edge(('colorcorrection', 'levels'))
   gr.add_edge(('colorcorrection', 'relight'))
+  gr.add_edge(('colorcorrection', 'filmic'))
   # want to split-tone monochrome images:
   gr.add_edge(('colorcorrection', 'monochrome'))
 
@@ -419,6 +438,16 @@ def add_edges(gr):
   gr.add_edge(('relight', 'shadhi'))
   gr.add_edge(('colisa', 'shadhi'))
 
+  # filmic is a simple parametric tonecurve + log that simulates film
+  # we want it as the last step in the linear pipe
+  gr.add_edge(('colorout', 'filmic'))
+  gr.add_edge(('tonecurve', 'filmic'))
+  gr.add_edge(('levels', 'filmic'))
+  gr.add_edge(('zonesystem', 'filmic'))
+  gr.add_edge(('relight', 'filmic'))
+  gr.add_edge(('colisa', 'filmic'))
+  gr.add_edge(('filmic', 'colorbalance'))
+
   # the bilateral filter, in linear input rgb
   gr.add_edge(('colorin', 'bilateral'))
   gr.add_edge(('bilateral', 'demosaic'))
@@ -440,8 +469,9 @@ def add_edges(gr):
   gr.add_edge(('equalizer', 'colorin'))
 
   # colorbalance needs a Lab buffer and should be after clipping. probably.
-  gr.add_edge(('clipping', 'colorbalance'))
   gr.add_edge(('colorbalance', 'colorin'))
+  gr.add_edge(('colorout', 'colorbalance'))
+  gr.add_edge(('colorize', 'colorbalance'))
 
   # colorchecker should happen early in Lab mode, after
   # highlight colour reconstruction, but with the ability to mess with everything
@@ -472,6 +502,7 @@ def add_edges(gr):
   gr.add_edge(('colorize', 'colorchecker'))
   gr.add_edge(('colisa', 'colorchecker'))
   gr.add_edge(('defringe', 'colorchecker'))
+  gr.add_edge(('filmic', 'colorchecker'))
   gr.add_edge(('colorchecker', 'colorreconstruction'))
 
   # ugly hack: don't let vibrance drift any more
@@ -511,6 +542,7 @@ gr.add_nodes([
 'equalizer', # deprecated
 'exposure',
 'finalscale',
+'filmic',
 'flip',
 'gamma',
 'globaltonemap',
@@ -540,6 +572,7 @@ gr.add_nodes([
 'soften',
 'splittoning',
 'spots',
+'retouch',
 'temperature',
 'tonecurve',
 'tonemap',

@@ -28,7 +28,7 @@ bundle_bin="$bundle_res"/bin
 bundle_data="$bundle_res"/share
 bundle_etc="$bundle_res"/etc
 
-export XDG_CONFIG_DIRS="$bundle_etc"/xdg
+export XDG_CONFIG_DIRS="$bundle_etc"
 export XDG_DATA_DIRS="$bundle_data"
 export GTK_DATA_PREFIX="$bundle_res"
 export GTK_EXE_PREFIX="$bundle_res"
@@ -159,4 +159,4 @@ for arg in "$@"; do
 done
 unset arg
 
-exec $GTK_DEBUG_GDB "$bundle_contents"/MacOS/"$name"-bin "$@" $SPLIT_ARGS --datadir "$bundle_data"/darktable --moduledir "$bundle_lib"/darktable --localedir "$bundle_data"/locale $EXTRA_ARGS
+exec $GTK_DEBUG_GDB "$bundle_contents"/MacOS/"$name"-bin "$@" $SPLIT_ARGS $EXTRA_ARGS

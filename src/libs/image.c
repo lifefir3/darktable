@@ -170,6 +170,7 @@ void gui_init(dt_lib_module_t *self)
   dt_lib_image_t *d = (dt_lib_image_t *)malloc(sizeof(dt_lib_image_t));
   self->data = (void *)d;
   self->widget = gtk_grid_new();
+  dt_gui_add_help_link(self->widget, "selected_images.html#selected_images_usage");
   GtkGrid *grid = GTK_GRID(self->widget);
   gtk_grid_set_row_spacing(grid, DT_PIXEL_APPLY_DPI(5));
   gtk_grid_set_column_spacing(grid, DT_PIXEL_APPLY_DPI(5));
@@ -223,13 +224,13 @@ void gui_init(dt_lib_module_t *self)
   g_signal_connect(G_OBJECT(button), "clicked", G_CALLBACK(button_clicked), GINT_TO_POINTER(3));
 
 
-  button = dtgtk_button_new(dtgtk_cairo_paint_refresh, CPF_DO_NOT_USE_BORDER);
+  button = dtgtk_button_new(dtgtk_cairo_paint_refresh, CPF_DO_NOT_USE_BORDER, NULL);
   d->rotate_ccw_button = button;
   gtk_widget_set_tooltip_text(button, _("rotate selected images 90 degrees CCW"));
   gtk_grid_attach(grid, button, 0, line, 1, 1);
   g_signal_connect(G_OBJECT(button), "clicked", G_CALLBACK(button_clicked), GINT_TO_POINTER(4));
 
-  button = dtgtk_button_new(dtgtk_cairo_paint_refresh, 1 | CPF_DO_NOT_USE_BORDER);
+  button = dtgtk_button_new(dtgtk_cairo_paint_refresh, 1 | CPF_DO_NOT_USE_BORDER, NULL);
   d->rotate_cw_button = button;
   gtk_widget_set_tooltip_text(button, _("rotate selected images 90 degrees CW"));
   gtk_grid_attach(grid, button, 1, line, 1, 1);

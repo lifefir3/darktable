@@ -15,7 +15,9 @@
     You should have received a copy of the GNU General Public License
     along with darktable.  If not, see <http://www.gnu.org/licenses/>.
 */
+
 #include "bauhaus/bauhaus.h"
+#include "common/tags.h"
 #include "control/control.h"
 #include "develop/develop.h"
 #include "develop/imageop.h"
@@ -25,6 +27,7 @@
 #include "gui/accelerators.h"
 #include "gui/gtk.h"
 #include "iop/iop_api.h"
+#include "common/iop_group.h"
 #include <assert.h>
 #include <gtk/gtk.h>
 #include <inttypes.h>
@@ -226,6 +229,7 @@ int legacy_params(dt_iop_module_t *self, const void *const old_params, const int
   return 1;
 }
 
+
 const char *name()
 {
   return _("watermark");
@@ -238,7 +242,7 @@ int flags()
 
 int groups()
 {
-  return IOP_GROUP_EFFECT;
+  return dt_iop_get_group("watermark", IOP_GROUP_EFFECT);
 }
 
 int operation_tags()
@@ -718,6 +722,29 @@ static gchar *_watermark_get_svgdoc(dt_iop_module_t *self, dt_iop_watermark_data
       g_list_free_full(res, &g_free);
     }
 
+    res = dt_tag_get_list(image->id);
+    gchar *keywords = dt_util_glist_to_str(", ", res);
+    svgdoc = _string_substitute(svgdata, "$(IMAGE.TAGS)", (keywords ? keywords : ""));
+    if(svgdoc != svgdata)
+    {
+      g_free(svgdata);
+      svgdata = svgdoc;
+    }
+    g_free(keywords);
+    if(res)
+    {
+      g_list_free_full(res, &g_free);
+    }
+
+    const int stars = image->flags & 0x7;
+    const char *const rating_str[] = { "☆☆☆☆☆", "★☆☆☆☆", "★★☆☆☆", "★★★☆☆", "★★★★☆", "★★★★★", "❌", "" };
+    svgdoc = _string_substitute(svgdata, "$(Xmp.xmp.Rating)", rating_str[stars]);
+    if(svgdoc != svgdata)
+    {
+      g_free(svgdata);
+      svgdata = svgdoc;
+    }
+
     // geolocation
     gchar *latitude = NULL, *longitude = NULL, *elevation = NULL;
     if(dt_conf_get_bool("plugins/lighttable/metadata_view/pretty_location"))
@@ -808,7 +835,7 @@ void process(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, const 
   /* create cairo context and setup transformation/scale */
   cairo_t *cr = cairo_create(surface);
 
-  // rsvg (or some part of cairo whic is used underneath) isn't thread safe, for example when handling fonts
+  // rsvg (or some part of cairo which is used underneath) isn't thread safe, for example when handling fonts
   dt_pthread_mutex_lock(&darktable.plugin_threadsafe);
 
   /* create the rsvghandle from parsed svg data */
@@ -1261,7 +1288,7 @@ void init(dt_iop_module_t *module)
   module->params_size = sizeof(dt_iop_watermark_params_t);
   module->default_params = calloc(1, sizeof(dt_iop_watermark_params_t));
   module->default_enabled = 0;
-  module->priority = 970; // module order created by iop_dependencies.py, do not edit!
+  module->priority = 971; // module order created by iop_dependencies.py, do not edit!
   module->params_size = sizeof(dt_iop_watermark_params_t);
   module->gui_data = NULL;
   dt_iop_watermark_params_t tmp = (dt_iop_watermark_params_t){
@@ -1287,6 +1314,7 @@ void gui_init(struct dt_iop_module_t *self)
   self->widget = gtk_grid_new();
   gtk_grid_set_row_spacing(GTK_GRID(self->widget), DT_BAUHAUS_SPACE);
   gtk_grid_set_column_spacing(GTK_GRID(self->widget), DT_PIXEL_APPLY_DPI(10));
+  dt_gui_add_help_link(self->widget, dt_get_help_url(self->op));
 
   gtk_grid_attach(GTK_GRID(self->widget), dt_ui_section_label_new(_("content")), 0, line++, 3, 1);
 
@@ -1301,7 +1329,7 @@ void gui_init(struct dt_iop_module_t *self)
   char *tooltip = g_strdup_printf(_("SVG watermarks in %s/watermarks or %s/watermarks"), configdir, datadir);
   gtk_widget_set_tooltip_text(g->watermarks, tooltip);
   g_free(tooltip);
-  g->refresh = dtgtk_button_new(dtgtk_cairo_paint_refresh, CPF_STYLE_FLAT | CPF_DO_NOT_USE_BORDER);
+  g->refresh = dtgtk_button_new(dtgtk_cairo_paint_refresh, CPF_STYLE_FLAT | CPF_DO_NOT_USE_BORDER, NULL);
   gtk_grid_attach(GTK_GRID(self->widget), label, 0, line++, 1, 1);
   gtk_grid_attach_next_to(GTK_GRID(self->widget), g->watermarks, label, GTK_POS_RIGHT, 1, 1);
   gtk_grid_attach_next_to(GTK_GRID(self->widget), g->refresh, g->watermarks, GTK_POS_RIGHT, 1, 1);
@@ -1386,7 +1414,7 @@ void gui_init(struct dt_iop_module_t *self)
   gtk_grid_set_column_spacing(GTK_GRID(bat), DT_PIXEL_APPLY_DPI(3));
   for(int i = 0; i < 9; i++)
   {
-    g->align[i] = dtgtk_togglebutton_new(dtgtk_cairo_paint_alignment, CPF_STYLE_FLAT | (CPF_SPECIAL_FLAG << i));
+    g->align[i] = dtgtk_togglebutton_new(dtgtk_cairo_paint_alignment, CPF_STYLE_FLAT | (CPF_SPECIAL_FLAG << i), NULL);
     gtk_widget_set_size_request(GTK_WIDGET(g->align[i]), DT_PIXEL_APPLY_DPI(16), DT_PIXEL_APPLY_DPI(16));
     gtk_grid_attach(GTK_GRID(bat), GTK_WIDGET(g->align[i]), i%3, i/3, 1, 1);
     g_signal_connect(G_OBJECT(g->align[i]), "toggled", G_CALLBACK(alignment_callback), self);

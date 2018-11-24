@@ -37,7 +37,7 @@
 
 // whenever _create_*_schema() gets changed you HAVE to bump this version and add an update path to
 // _upgrade_*_schema_step()!
-#define CURRENT_DATABASE_VERSION_LIBRARY 15
+#define CURRENT_DATABASE_VERSION_LIBRARY 17
 #define CURRENT_DATABASE_VERSION_DATA 1
 
 typedef struct dt_database_t
@@ -285,7 +285,7 @@ static gboolean _migrate_schema(dt_database_t *db, int version)
       i = 0;
     }
 
-    // find the next free ammended version of name
+    // find the next free amended version of name
     sqlite3_prepare_v2(db->handle, "SELECT name FROM main.presets  WHERE name = ?1 || ' (' || ?2 || ')' AND "
                                    "operation = ?3 AND op_version = ?4",
                        -1, &innerstmt, NULL);
@@ -967,12 +967,48 @@ static int _upgrade_library_schema_step(dt_database_t *db, int version)
 
     sqlite3_exec(db->handle, "COMMIT", NULL, NULL, NULL);
     new_version = 15;
-  } // maybe in the future, see commented out code elsewhere
-    //   else if(version == XXX)
-    //   {
-    //     sqlite3_exec(db->handle, "ALTER TABLE film_rolls ADD COLUMN external_drive VARCHAR(1024)", NULL,
-    //     NULL, NULL);
-    //   }
+  }
+  else if(version == 15)
+  {
+    sqlite3_exec(db->handle, "BEGIN TRANSACTION", NULL, NULL, NULL);
+    ////////////////////////////// custom image order
+    TRY_EXEC("ALTER TABLE main.images ADD COLUMN position INTEGER",
+             "[init] can't add `position' column to images table in database\n");
+    TRY_EXEC("CREATE INDEX main.image_position_index ON images (position)",
+             "[init] can't create index for custom image order table\n");
+
+    // Set the initial image sequence. The image id - the sequece images were imported -
+    // defines the initial order of images.
+    //
+    // An int64 is used for the position index. The upper 31 bits define the initial order.
+    // The lower 32bit provide space to reorder images.
+    //
+    // see: dt_collection_move_before()
+    //
+    TRY_EXEC("UPDATE main.images SET position = id << 32",
+             "[init] can't update positions custom image order table\n");
+
+    sqlite3_exec(db->handle, "COMMIT", NULL, NULL, NULL);
+    new_version = 16;
+  }
+  else if(version == 16)
+  {
+    sqlite3_exec(db->handle, "BEGIN TRANSACTION", NULL, NULL, NULL);
+    ////////////////////////////// final image aspect ratio
+    TRY_EXEC("ALTER TABLE main.images ADD COLUMN aspect_ratio REAL",
+             "[init] can't add `aspect_ratio' column to images table in database\n");
+    TRY_EXEC("UPDATE main.images SET aspect_ratio = 0.0",
+             "[init] can't update aspect_ratio in database\n");
+
+    sqlite3_exec(db->handle, "COMMIT", NULL, NULL, NULL);
+    new_version = 17;
+  }
+  // maybe in the future, see commented out code elsewhere
+  //   else if(version == XXX)
+  //   {
+  //     sqlite3_exec(db->handle, "ALTER TABLE film_rolls ADD COLUMN external_drive VARCHAR(1024)", NULL,
+  //     NULL, NULL);
+  //   }
   else
     new_version = version; // should be the fallback so that calling code sees that we are in an infinite loop
 
@@ -1038,7 +1074,7 @@ static gboolean _upgrade_library_schema(dt_database_t *db, int version)
  * _upgrade_data_schema_step() instead. */
 static gboolean _upgrade_data_schema(dt_database_t *db, int version)
 {
-  while(version < CURRENT_DATABASE_VERSION_LIBRARY)
+  while(version < CURRENT_DATABASE_VERSION_DATA)
   {
     int new_version = _upgrade_data_schema_step(db, version);
     if(new_version == version)
@@ -1084,11 +1120,13 @@ static void _create_library_schema(dt_database_t *db)
       "caption VARCHAR, description VARCHAR, license VARCHAR, sha1sum CHAR(40), "
       "orientation INTEGER, histogram BLOB, lightmap BLOB, longitude REAL, "
       "latitude REAL, altitude REAL, color_matrix BLOB, colorspace INTEGER, version INTEGER, "
-      "max_version INTEGER, write_timestamp INTEGER, history_end INTEGER)",
+      "max_version INTEGER, write_timestamp INTEGER, history_end INTEGER, position INTEGER, aspect_ratio REAL)",
       NULL, NULL, NULL);
   sqlite3_exec(db->handle, "CREATE INDEX main.images_group_id_index ON images (group_id)", NULL, NULL, NULL);
   sqlite3_exec(db->handle, "CREATE INDEX main.images_film_id_index ON images (film_id)", NULL, NULL, NULL);
   sqlite3_exec(db->handle, "CREATE INDEX main.images_filename_index ON images (filename)", NULL, NULL, NULL);
+  sqlite3_exec(db->handle, "CREATE INDEX main.image_position_index ON images (position)", NULL, NULL, NULL);
+
   ////////////////////////////// selected_images
   sqlite3_exec(db->handle, "CREATE TABLE main.selected_images (imgid INTEGER PRIMARY KEY)", NULL, NULL, NULL);
   ////////////////////////////// history
@@ -1337,7 +1375,7 @@ void dt_database_show_error(const dt_database_t *db)
 {
   if(!db->lock_acquired)
   {
-    char *label_text = g_markup_printf_escaped(_("an error has occured while trying to open the database from\n"
+    char *label_text = g_markup_printf_escaped(_("an error has occurred while trying to open the database from\n"
                                                   "\n"
                                                   "<span style=\"italic\">%s</span>\n"
                                                   "\n"
@@ -1360,7 +1398,7 @@ static gboolean pid_is_alive(int pid)
 {
   gboolean pid_is_alive;
 
-#ifdef __WIN32__
+#ifdef _WIN32
   pid_is_alive = FALSE;
   HANDLE h = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, pid);
   if(h)
@@ -1497,6 +1535,11 @@ static gboolean _lock_databases(dt_database_t *db)
 
 dt_database_t *dt_database_init(const char *alternative, const gboolean load_data)
 {
+  /*  set the threading mode to Serialized */
+  sqlite3_config(SQLITE_CONFIG_SERIALIZED);
+
+  sqlite3_initialize();
+
 start:
   /* migrate default database location to new default */
   _database_migrate_to_xdg_structure();
@@ -1544,6 +1587,14 @@ start:
   db->dbfilename_data = g_strdup(dbfilename_data);
   db->dbfilename_library = g_strdup(dbfilename_library);
 
+  /* make sure the folder exists. this might not be the case for new databases */
+  char *data_path = g_path_get_dirname(db->dbfilename_data);
+  char *library_path = g_path_get_dirname(db->dbfilename_library);
+  g_mkdir_with_parents(data_path, 0750);
+  g_mkdir_with_parents(library_path, 0750);
+  g_free(data_path);
+  g_free(library_path);
+
   /* having more than one instance of darktable using the same database is a bad idea */
   /* try to get locks for the databases */
   db->lock_acquired = _lock_databases(db);
@@ -1554,6 +1605,7 @@ start:
     g_free(dbname);
     return db;
   }
+
 
   /* opening / creating database */
   if(sqlite3_open(db->dbfilename_library, &db->handle))
@@ -1646,7 +1698,7 @@ start:
       // oh, bad situation. the database is corrupt and can't be read!
       // we inform the user here and let him decide what to do: exit or delete and try again.
 
-      char *label_text = g_markup_printf_escaped(_("an error has occured while trying to open the database from\n"
+      char *label_text = g_markup_printf_escaped(_("an error has occurred while trying to open the database from\n"
                                                    "\n"
                                                    "<span style=\"italic\">%s</span>\n"
                                                    "\n"
@@ -1722,7 +1774,7 @@ start:
     // oh, bad situation. the database is corrupt and can't be read!
     // we inform the user here and let him decide what to do: exit or delete and try again.
 
-    char *label_text = g_markup_printf_escaped(_("an error has occured while trying to open the database from\n"
+    char *label_text = g_markup_printf_escaped(_("an error has occurred while trying to open the database from\n"
                                                   "\n"
                                                   "<span style=\"italic\">%s</span>\n"
                                                   "\n"
@@ -1839,6 +1891,8 @@ void dt_database_destroy(const dt_database_t *db)
   g_free(db->dbfilename_data);
   g_free(db->dbfilename_library);
   g_free((dt_database_t *)db);
+
+  sqlite3_shutdown();
 }
 
 sqlite3 *dt_database_get(const dt_database_t *db)

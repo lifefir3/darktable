@@ -45,6 +45,7 @@ typedef struct dt_lib_colorpicker_t
   GtkWidget *add_sample_button;
   GtkWidget *display_samples_check_box;
   GdkRGBA rgb;
+  gboolean from_proxy;
 } dt_lib_colorpicker_t;
 
 const char *name(dt_lib_module_t *self)
@@ -125,7 +126,7 @@ static gboolean sample_draw_callback(GtkWidget *widget, cairo_t *cr, gpointer da
       gtk_style_context_get_color(gtk_widget_get_style_context(widget), gtk_widget_get_state_flags(widget), &fg_color);
 
       gdk_cairo_set_source_rgba(cr, &fg_color);
-      dtgtk_cairo_paint_lock(cr, border, border, icon_width, icon_height, 0);
+      dtgtk_cairo_paint_lock(cr, border, border, icon_width, icon_height, 0, NULL);
     }
   }
 
@@ -220,10 +221,14 @@ static void _size_changed(GtkComboBox *widget, gpointer p)
 {
   dt_lib_colorpicker_t *data = ((dt_lib_module_t *)p)->data;
 
-  dt_conf_set_int("ui_last/colorpicker_size", gtk_combo_box_get_active(widget));
-  darktable.lib->proxy.colorpicker.size = gtk_combo_box_get_active(widget);
-  gtk_widget_set_sensitive(data->statistic_selector, dt_conf_get_int("ui_last/colorpicker_size"));
-  dt_dev_invalidate_from_gui(darktable.develop);
+  const int size = gtk_combo_box_get_active(widget);
+
+  dt_conf_set_int("ui_last/colorpicker_size", size);
+  darktable.lib->proxy.colorpicker.size = size;
+  gtk_widget_set_sensitive(data->statistic_selector, size);
+
+  if (!data->from_proxy)
+    dt_dev_invalidate_from_gui(darktable.develop);
   _update_picker_output(p);
 }
 
@@ -438,7 +443,9 @@ static void _set_sample_area(dt_lib_module_t *self, float size)
         = size;
   }
 
-  gtk_combo_box_set_active(GTK_COMBO_BOX(d->size_selector), 1);
+  d->from_proxy = TRUE;
+  gtk_combo_box_set_active(GTK_COMBO_BOX(d->size_selector), DT_COLORPICKER_SIZE_BOX);
+  d->from_proxy = FALSE;
 }
 
 static void _set_sample_point(dt_lib_module_t *self, float x, float y)
@@ -451,7 +458,9 @@ static void _set_sample_point(dt_lib_module_t *self, float x, float y)
     darktable.develop->gui_module->color_picker_point[1] = y;
   }
 
-  gtk_combo_box_set_active(GTK_COMBO_BOX(d->size_selector), 0);
+  d->from_proxy = TRUE;
+  gtk_combo_box_set_active(GTK_COMBO_BOX(d->size_selector), DT_COLORPICKER_SIZE_POINT);
+  d->from_proxy = FALSE;
 }
 
 void gui_init(dt_lib_module_t *self)
@@ -473,6 +482,7 @@ void gui_init(dt_lib_module_t *self)
   data->rgb.green = 0.7;
   data->rgb.blue = 0.7;
   data->rgb.alpha = 1.0;
+  data->from_proxy = FALSE;
 
   // Initializing proxy functions and data
   darktable.lib->proxy.colorpicker.module = self;
@@ -501,6 +511,7 @@ void gui_init(dt_lib_module_t *self)
   // Setting up the GUI
   self->widget = container;
   gtk_box_pack_start(GTK_BOX(container), output_row, TRUE, TRUE, 0);
+  dt_gui_add_help_link(self->widget, dt_get_help_url(self->plugin_name));
 
   // The color patch
   data->color_patch = gtk_drawing_area_new();
@@ -520,7 +531,7 @@ void gui_init(dt_lib_module_t *self)
 
   g_signal_connect(G_OBJECT(data->size_selector), "changed", G_CALLBACK(_size_changed), (gpointer)self);
 
-  data->picker_button = dtgtk_togglebutton_new(dtgtk_cairo_paint_colorpicker, CPF_STYLE_BOX);
+  data->picker_button = dtgtk_togglebutton_new(dtgtk_cairo_paint_colorpicker, CPF_STYLE_BOX, NULL);
   gtk_widget_set_size_request(data->picker_button, DT_PIXEL_APPLY_DPI(50), -1);
   gtk_box_pack_start(GTK_BOX(picker_subrow), data->picker_button, FALSE, FALSE, 0);
 
@@ -559,7 +570,6 @@ void gui_init(dt_lib_module_t *self)
   darktable.lib->proxy.colorpicker.restrict_histogram
       = dt_conf_get_int("ui_last/colorpicker_restrict_histogram");
   gtk_box_pack_start(GTK_BOX(container), restrict_button, TRUE, TRUE, 0);
-
   g_signal_connect(G_OBJECT(restrict_button), "toggled", G_CALLBACK(_restrict_histogram_changed), NULL);
 
   // Adding the live samples section
@@ -654,6 +664,8 @@ void gui_reset(dt_lib_module_t *self)
         = darktable.lib->proxy.colorpicker.picked_color_lab_min[i]
         = darktable.lib->proxy.colorpicker.picked_color_lab_max[i] = 0;
   }
+
+  data->from_proxy = FALSE;
 
   _update_picker_output(self);
 

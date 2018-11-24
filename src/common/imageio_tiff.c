@@ -138,11 +138,21 @@ static inline int _read_planar_f(tiff_t *t)
   return 1;
 }
 
-static void _warning_handler(const char* module, const char* fmt, va_list ap)
+static void _warning_error_handler(const char *type, const char* module, const char* fmt, va_list ap)
 {
-  fprintf(stderr, "[tiff_open] warning: %s: ", module);
+  fprintf(stderr, "[tiff_open] %s: %s: ", type, module);
   vfprintf(stderr, fmt, ap);
   fprintf(stderr, "\n");
+}
+
+static void _warning_handler(const char* module, const char* fmt, va_list ap)
+{
+  _warning_error_handler("warning", module, fmt, ap);
+}
+
+static void _error_handler(const char* module, const char* fmt, va_list ap)
+{
+  _warning_error_handler("error", module, fmt, ap);
 }
 
 dt_imageio_retval_t dt_imageio_open_tiff(dt_image_t *img, const char *filename, dt_mipmap_buffer_t *mbuf)
@@ -150,6 +160,7 @@ dt_imageio_retval_t dt_imageio_open_tiff(dt_image_t *img, const char *filename, 
   // doing this once would be enough, but our imageio reading code is
   // compiled into dt's core and doesn't have an init routine.
   TIFFSetWarningHandler(_warning_handler);
+  TIFFSetErrorHandler(_error_handler);
 
   const char *ext = filename + strlen(filename);
   while(*ext != '.' && ext > filename) ext--;
@@ -163,7 +174,15 @@ dt_imageio_retval_t dt_imageio_open_tiff(dt_image_t *img, const char *filename, 
 
   t.image = img;
 
-  if((t.tiff = TIFFOpen(filename, "rb")) == NULL) return DT_IMAGEIO_FILE_CORRUPTED;
+#ifdef _WIN32
+  wchar_t *wfilename = g_utf8_to_utf16(filename, -1, NULL, NULL, NULL);
+  t.tiff = TIFFOpenW(wfilename, "rb");
+  g_free(wfilename);
+#else
+  t.tiff = TIFFOpen(filename, "rb");
+#endif
+
+  if(t.tiff == NULL) return DT_IMAGEIO_FILE_CORRUPTED;
 
   TIFFGetField(t.tiff, TIFFTAG_IMAGEWIDTH, &t.width);
   TIFFGetField(t.tiff, TIFFTAG_IMAGELENGTH, &t.height);
@@ -207,7 +226,7 @@ dt_imageio_retval_t dt_imageio_open_tiff(dt_image_t *img, const char *filename, 
     return DT_IMAGEIO_CACHE_FULL;
   }
 
-  /* dont depend on planar config if spp == 1 */
+  /* don't depend on planar config if spp == 1 */
   if(t.spp > 1 && config != PLANARCONFIG_CONTIG)
   {
     fprintf(stderr, "[tiff_open] error: planar config other than contig is not supported.\n");
@@ -249,7 +268,15 @@ int dt_imageio_tiff_read_profile(const char *filename, uint8_t **out)
 
   if(!(filename && *filename && out)) return 0;
 
-  if((tiff = TIFFOpen(filename, "rb")) == NULL) return 0;
+#ifdef _WIN32
+  wchar_t *wfilename = g_utf8_to_utf16(filename, -1, NULL, NULL, NULL);
+  tiff = TIFFOpenW(wfilename, "rb");
+  g_free(wfilename);
+#else
+  tiff = TIFFOpen(filename, "rb");
+#endif
+
+  if(tiff == NULL) return 0;
 
   if(TIFFGetField(tiff, TIFFTAG_ICCPROFILE, &profile_len, &profile))
   {

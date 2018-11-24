@@ -25,6 +25,7 @@
 #include "develop/imageop_math.h"
 #include "gui/gtk.h"
 #include "iop/iop_api.h"
+#include "common/iop_group.h"
 #include <gtk/gtk.h>
 #include <math.h>
 #include <stdlib.h>
@@ -62,6 +63,7 @@ typedef struct dt_iop_defringe_gui_data_t
 //}
 // dt_iop_defringe_global_data_t;
 
+
 const char *name()
 {
   return _("defringe");
@@ -69,7 +71,7 @@ const char *name()
 
 int groups()
 {
-  return IOP_GROUP_CORRECT;
+  return dt_iop_get_group("defringe", IOP_GROUP_CORRECT);
 }
 
 int flags()
@@ -298,7 +300,7 @@ void process(struct dt_iop_module_t *module, dt_dev_pixelpipe_iop_t *piece, cons
       if(MODE_LOCAL_AVERAGE == d->op_mode && out[(size_t)v * width * ch + t * ch + 3] > thresh)
       {
         float local_avg = 0.0;
-        // use some and not all values from the neigbourhood to speed things up:
+        // use some and not all values from the neighbourhood to speed things up:
         const int *tmp = xy_avg;
         for(int u = 0; u < samples_avg; u++)
         {
@@ -341,7 +343,7 @@ void process(struct dt_iop_module_t *module, dt_dev_pixelpipe_iop_t *piece, cons
           int dy = *tmp++;
           int x = MAX(0, MIN(width - 1, t + dx));
           int y = MAX(0, MIN(height - 1, v + dy));
-          // inverse chroma weighted average of neigbouring pixels inside window
+          // inverse chroma weighted average of neighbouring pixels inside window
           // also taking average edge chromaticity into account (either global or local average)
           weight = 1.0 / (out[(size_t)y * width * ch + x * ch + 3] + avg_edge_chroma);
           atot += weight * in[(size_t)y * width * ch + x * ch + 1];
@@ -395,7 +397,7 @@ void init(dt_iop_module_t *module)
 {
   module->params = calloc(1, sizeof(dt_iop_defringe_params_t));
   module->default_params = calloc(1, sizeof(dt_iop_defringe_params_t));
-  module->priority = 397; // module order created by iop_dependencies.py, do not edit!
+  module->priority = 414; // module order created by iop_dependencies.py, do not edit!
   module->params_size = sizeof(dt_iop_defringe_params_t);
   module->gui_data = NULL;
   module->data = NULL;
@@ -437,6 +439,7 @@ void gui_init(dt_iop_module_t *module)
   dt_iop_defringe_params_t *p = (dt_iop_defringe_params_t *)module->params;
 
   module->widget = gtk_box_new(GTK_ORIENTATION_VERTICAL, DT_BAUHAUS_SPACE);
+  dt_gui_add_help_link(module->widget, dt_get_help_url(module->op));
 
   /* mode selection */
   g->mode_select = dt_bauhaus_combobox_new(module);

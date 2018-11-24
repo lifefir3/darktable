@@ -42,7 +42,6 @@
 #include <string.h>
 #include <strings.h>
 
-
 void dt_control_init(dt_control_t *s)
 {
   memset(s->vimkey, 0, sizeof(s->vimkey));
@@ -76,6 +75,7 @@ void dt_control_init(dt_control_t *s)
   s->dev_zoom_x = 0;
   s->dev_zoom_y = 0;
   s->dev_zoom = DT_ZOOM_FIT;
+  s->lock_cursor_shape = FALSE;
 }
 
 void dt_control_key_accelerators_on(struct dt_control_t *s)
@@ -98,12 +98,25 @@ int dt_control_is_key_accelerators_on(struct dt_control_t *s)
   return s->key_accelerators_on;
 }
 
+void dt_control_forbid_change_cursor()
+{
+  darktable.control->lock_cursor_shape = TRUE;
+}
+
+void dt_control_allow_change_cursor()
+{
+  darktable.control->lock_cursor_shape = FALSE;
+}
+
 void dt_control_change_cursor(dt_cursor_t curs)
 {
-  GtkWidget *widget = dt_ui_main_window(darktable.gui->ui);
-  GdkCursor *cursor = gdk_cursor_new_for_display(gdk_display_get_default(), curs);
-  gdk_window_set_cursor(gtk_widget_get_window(widget), cursor);
-  g_object_unref(cursor);
+  if (!darktable.control->lock_cursor_shape)
+  {
+    GtkWidget *widget = dt_ui_main_window(darktable.gui->ui);
+    GdkCursor *cursor = gdk_cursor_new_for_display(gdk_display_get_default(), curs);
+    gdk_window_set_cursor(gtk_widget_get_window(widget), cursor);
+    g_object_unref(cursor);
+  }
 }
 
 int dt_control_running()
@@ -176,19 +189,27 @@ void dt_control_cleanup(dt_control_t *s)
 
 gboolean dt_control_configure(GtkWidget *da, GdkEventConfigure *event, gpointer user_data)
 {
-  darktable.control->tabborder = 8;
-  int tb = darktable.control->tabborder;
+  darktable.control->tabborder = 2;
+  const int tb = darktable.control->tabborder;
   // re-configure all components:
   dt_view_manager_configure(darktable.view_manager, event->width - 2 * tb, event->height - 2 * tb);
   return TRUE;
 }
 
+static GdkRGBA lookup_color(GtkStyleContext *context, const char *name)
+{
+  GdkRGBA color, fallback = {1.0, 0.0, 0.0, 1.0};
+  if(!gtk_style_context_lookup_color (context, name, &color))
+    color = fallback;
+  return color;
+}
+
 void *dt_control_expose(void *voidptr)
 {
-  int width, height, pointerx, pointery;
+  int pointerx, pointery;
   if(!darktable.gui->surface) return NULL;
-  width = dt_cairo_image_surface_get_width(darktable.gui->surface);
-  height = dt_cairo_image_surface_get_height(darktable.gui->surface);
+  const int width = dt_cairo_image_surface_get_width(darktable.gui->surface);
+  const int height = dt_cairo_image_surface_get_height(darktable.gui->surface);
   GtkWidget *widget = dt_ui_center(darktable.gui->ui);
 #if GTK_CHECK_VERSION(3, 20, 0)
   gdk_window_get_device_position(gtk_widget_get_window(widget),
@@ -206,36 +227,26 @@ void *dt_control_expose(void *voidptr)
 
   // TODO: control_expose: only redraw the part not overlapped by temporary control panel show!
   //
-  float tb = 8; // fmaxf(10, width/100.0);
+  float tb = 2; // fmaxf(10, width/100.0);
   darktable.control->tabborder = tb;
   darktable.control->width = width;
   darktable.control->height = height;
 
-  GdkRGBA color;
   GtkStyleContext *context = gtk_widget_get_style_context(widget);
-  gboolean color_found = gtk_style_context_lookup_color (context, "bg_color", &color);
-  if(!color_found)
-  {
-    color.red = 1.0;
-    color.green = 0.0;
-    color.blue = 0.0;
-    color.alpha = 1.0;
-  }
-  gdk_cairo_set_source_rgba(cr, &color);
+
+  // look up some colors once
+  GdkRGBA bg_color = lookup_color(context, "bg_color");
+  GdkRGBA really_dark_bg_color = lookup_color(context, "really_dark_bg_color");
+  GdkRGBA selected_bg_color = lookup_color(context, "selected_bg_color");
+  GdkRGBA fg_color = lookup_color(context, "fg_color");
+
+  gdk_cairo_set_source_rgba(cr, &bg_color);
 
   cairo_set_line_width(cr, tb);
   cairo_rectangle(cr, tb / 2., tb / 2., width - tb, height - tb);
   cairo_stroke(cr);
   cairo_set_line_width(cr, 1.5);
-  color_found = gtk_style_context_lookup_color (context, "really_dark_bg_color", &color);
-  if(!color_found)
-  {
-    color.red = 1.0;
-    color.green = 0.0;
-    color.blue = 0.0;
-    color.alpha = 1.0;
-  }
-  gdk_cairo_set_source_rgba(cr, &color);
+  gdk_cairo_set_source_rgba(cr, &really_dark_bg_color);
   cairo_rectangle(cr, tb, tb, width - 2 * tb, height - 2 * tb);
   cairo_stroke(cr);
 
@@ -264,8 +275,11 @@ void *dt_control_expose(void *voidptr)
     pango_layout_set_text(layout, darktable.control->log_message[darktable.control->log_ack], -1);
     pango_layout_get_pixel_extents(layout, &ink, NULL);
     const float pad = DT_PIXEL_APPLY_DPI(20.0f), xc = width / 2.0;
-    const float yc = height * 0.85 + DT_PIXEL_APPLY_DPI(10), wd = pad + ink.width * .5f;
+    const float yc = height * 0.85 + DT_PIXEL_APPLY_DPI(10), wd = MIN(pad + ink.width * .5f, width * .5f - pad);
     float rad = DT_PIXEL_APPLY_DPI(14);
+    // ellipsze the text if it does not fit on the screen
+    pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_MIDDLE);
+    pango_layout_set_width(layout, (int)(PANGO_SCALE * wd * 2.0f));
     cairo_set_line_width(cr, 1.);
     cairo_move_to(cr, xc - wd, yc + rad);
     for(int k = 0; k < 5; k++)
@@ -276,30 +290,14 @@ void *dt_control_expose(void *voidptr)
       cairo_line_to(cr, xc - wd, yc + rad);
       if(k == 0)
       {
-        color_found = gtk_style_context_lookup_color (context, "selected_bg_color", &color);
-        if(!color_found)
-        {
-          color.red = 1.0;
-          color.green = 0.0;
-          color.blue = 0.0;
-          color.alpha = 1.0;
-        }
-        gdk_cairo_set_source_rgba(cr, &color);
+        gdk_cairo_set_source_rgba(cr, &selected_bg_color);
         cairo_fill_preserve(cr);
       }
       cairo_set_source_rgba(cr, 0., 0., 0., 1.0 / (1 + k));
       cairo_stroke(cr);
       rad += .5f;
     }
-    color_found = gtk_style_context_lookup_color (context, "fg_color", &color);
-    if(!color_found)
-    {
-      color.red = 1.0;
-      color.green = 0.0;
-      color.blue = 0.0;
-      color.alpha = 1.0;
-    }
-    gdk_cairo_set_source_rgba(cr, &color);
+    gdk_cairo_set_source_rgba(cr, &fg_color);
     cairo_move_to(cr, xc - wd + .5f * pad, (yc + 1. / 3. * fontsize) - fontsize);
     pango_cairo_show_layout(cr, layout);
     pango_font_description_free(desc);
@@ -321,11 +319,11 @@ void *dt_control_expose(void *voidptr)
     const float xc = width / 2.0, yc = height * 0.85 - DT_PIXEL_APPLY_DPI(30), wd = ink.width * .5f;
     cairo_move_to(cr, xc - wd, yc + 1. / 3. * fontsize - fontsize);
     pango_cairo_layout_path(cr, layout);
-    cairo_set_source_rgb(cr, 0.7, 0.7, 0.7);
-    cairo_fill_preserve(cr);
-    cairo_set_line_width(cr, 0.7);
-    cairo_set_source_rgb(cr, 0.3, 0.3, 0.3);
-    cairo_stroke(cr);
+    cairo_set_line_width(cr, 2.0);
+    gdk_cairo_set_source_rgba(cr, &selected_bg_color);
+    cairo_stroke_preserve(cr);
+    gdk_cairo_set_source_rgba(cr, &fg_color);
+    cairo_fill(cr);
     pango_font_description_free(desc);
     g_object_unref(layout);
   }
@@ -370,9 +368,9 @@ void dt_control_mouse_enter()
 
 void dt_control_mouse_moved(double x, double y, double pressure, int which)
 {
-  float tb = darktable.control->tabborder;
-  float wd = darktable.control->width;
-  float ht = darktable.control->height;
+  const float tb = darktable.control->tabborder;
+  const float wd = darktable.control->width;
+  const float ht = darktable.control->height;
 
   if(x > tb && x < wd - tb && y > tb && y < ht - tb)
     dt_view_manager_mouse_moved(darktable.view_manager, x - tb, y - tb, pressure, which);
@@ -382,7 +380,7 @@ void dt_control_button_released(double x, double y, int which, uint32_t state)
 {
   darktable.control->button_down = 0;
   darktable.control->button_down_which = 0;
-  float tb = darktable.control->tabborder;
+  const float tb = darktable.control->tabborder;
   // float wd = darktable.control->width;
   // float ht = darktable.control->height;
 
@@ -451,7 +449,7 @@ static gboolean _dt_ctl_log_message_timeout_callback(gpointer data)
 
 void dt_control_button_pressed(double x, double y, double pressure, int which, int type, uint32_t state)
 {
-  float tb = darktable.control->tabborder;
+  const float tb = darktable.control->tabborder;
   darktable.control->button_down = 1;
   darktable.control->button_down_which = which;
   darktable.control->button_type = type;
@@ -459,8 +457,8 @@ void dt_control_button_pressed(double x, double y, double pressure, int which, i
   darktable.control->button_y = y - tb;
   // adding pressure to this data structure is not needed right now. should the need ever arise: here is the
   // place to do it :)
-  float wd = darktable.control->width;
-  float ht = darktable.control->height;
+  const float wd = darktable.control->width;
+  const float ht = darktable.control->height;
 
   // ack log message:
   dt_pthread_mutex_lock(&darktable.control->log_mutex);
@@ -636,7 +634,7 @@ int dt_control_key_pressed_override(guint key, guint state)
     else if(g_unichar_isprint(unichar)) // printable unicode character
     {
       gchar utf8[6];
-      gint char_width = g_unichar_to_utf8(unichar, utf8);
+      const gint char_width = g_unichar_to_utf8(unichar, utf8);
       if(darktable.control->vimkey_cnt + 1 + char_width < 256)
       {
         g_utf8_strncpy(darktable.control->vimkey + darktable.control->vimkey_cnt, utf8, 1);
@@ -691,7 +689,7 @@ int dt_control_key_pressed_override(guint key, guint state)
 
     /* toggle the header visibility state */
     g_snprintf(param, sizeof(param), "%s/ui/show_header", cv->module_name);
-    gboolean header = !dt_conf_get_bool(param);
+    const gboolean header = !dt_conf_get_bool(param);
     dt_conf_set_bool(param, header);
 
     /* show/hide the actual header panel */
@@ -699,12 +697,18 @@ int dt_control_key_pressed_override(guint key, guint state)
     gtk_widget_queue_draw(dt_ui_center(darktable.gui->ui));
     return 1;
   }
+  // add an option to allow skip mouse events while editing masks
+  else if(key == accels->darkroom_skip_mouse_events.accel_key && state == accels->darkroom_skip_mouse_events.accel_mods)
+  {
+    darktable.develop->darkroom_skip_mouse_events = TRUE;
+    return 1;
+  }
   return 0;
 }
 
 int dt_control_key_pressed(guint key, guint state)
 {
-  int handled = dt_view_manager_key_pressed(darktable.view_manager, key, state);
+  const int handled = dt_view_manager_key_pressed(darktable.view_manager, key, state);
   if(handled) gtk_widget_queue_draw(dt_ui_center(darktable.gui->ui));
   return handled;
 }
@@ -735,7 +739,7 @@ void dt_control_hinter_message(const struct dt_control_t *s, const char *message
 int32_t dt_control_get_mouse_over_id()
 {
   dt_pthread_mutex_lock(&(darktable.control->global_mutex));
-  int32_t result = darktable.control->mouse_over_id;
+  const int32_t result = darktable.control->mouse_over_id;
   dt_pthread_mutex_unlock(&(darktable.control->global_mutex));
   return result;
 }
@@ -756,7 +760,7 @@ void dt_control_set_mouse_over_id(int32_t value)
 float dt_control_get_dev_zoom_x()
 {
   dt_pthread_mutex_lock(&(darktable.control->global_mutex));
-  float result = darktable.control->dev_zoom_x;
+  const float result = darktable.control->dev_zoom_x;
   dt_pthread_mutex_unlock(&(darktable.control->global_mutex));
   return result;
 }
@@ -770,7 +774,7 @@ void dt_control_set_dev_zoom_x(float value)
 float dt_control_get_dev_zoom_y()
 {
   dt_pthread_mutex_lock(&(darktable.control->global_mutex));
-  float result = darktable.control->dev_zoom_y;
+  const float result = darktable.control->dev_zoom_y;
   dt_pthread_mutex_unlock(&(darktable.control->global_mutex));
   return result;
 }
@@ -784,7 +788,7 @@ void dt_control_set_dev_zoom_y(float value)
 float dt_control_get_dev_zoom_scale()
 {
   dt_pthread_mutex_lock(&(darktable.control->global_mutex));
-  float result = darktable.control->dev_zoom_scale;
+  const float result = darktable.control->dev_zoom_scale;
   dt_pthread_mutex_unlock(&(darktable.control->global_mutex));
   return result;
 }
@@ -798,7 +802,7 @@ void dt_control_set_dev_zoom_scale(float value)
 int dt_control_get_dev_closeup()
 {
   dt_pthread_mutex_lock(&(darktable.control->global_mutex));
-  int result = darktable.control->dev_closeup;
+  const int result = darktable.control->dev_closeup;
   dt_pthread_mutex_unlock(&(darktable.control->global_mutex));
   return result;
 }
@@ -812,7 +816,7 @@ void dt_control_set_dev_closeup(int value)
 dt_dev_zoom_t dt_control_get_dev_zoom()
 {
   dt_pthread_mutex_lock(&(darktable.control->global_mutex));
-  dt_dev_zoom_t result = darktable.control->dev_zoom;
+  const dt_dev_zoom_t result = darktable.control->dev_zoom;
   dt_pthread_mutex_unlock(&(darktable.control->global_mutex));
   return result;
 }

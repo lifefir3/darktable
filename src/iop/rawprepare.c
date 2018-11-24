@@ -29,6 +29,7 @@
 #include "gui/gtk.h"
 #include "gui/presets.h"
 #include "iop/iop_api.h"
+#include "common/iop_group.h"
 
 #include <gtk/gtk.h>
 #include <stdint.h>
@@ -91,6 +92,7 @@ typedef struct dt_iop_rawprepare_global_data_t
   int kernel_rawprepare_4f;
 } dt_iop_rawprepare_global_data_t;
 
+
 const char *name()
 {
   return C_("modulename", "raw black/white point");
@@ -108,7 +110,7 @@ int flags()
 
 int groups()
 {
-  return IOP_GROUP_BASIC;
+  return dt_iop_get_group("raw black/white point", IOP_GROUP_BASIC);
 }
 
 void init_presets(dt_iop_module_so_t *self)
@@ -169,6 +171,26 @@ void connect_key_accels(dt_iop_module_t *self)
   }
 }
 
+// value to round,   reference on how to round:
+//  if ref was even, returned value will be even
+//  if ref was odd,  returned value will be odd
+static int round_smart(float val, int ref)
+{
+  // first, just round it
+  int round = (int)roundf(val);
+
+  if((ref & 1) ^ (round & 1)) round++;
+
+  return round;
+}
+
+static int compute_proper_crop(dt_dev_pixelpipe_iop_t *piece, const dt_iop_roi_t *const roi_in, int value)
+{
+  const float scale = roi_in->scale / piece->iscale;
+
+  return round_smart((float)value * scale, value);
+}
+
 int distort_transform(dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, float *points, size_t points_count)
 {
   dt_iop_rawprepare_data_t *d = (dt_iop_rawprepare_data_t *)piece->data;
@@ -216,8 +238,8 @@ void modify_roi_out(dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, dt_iop
   int32_t x = d->x + d->width, y = d->y + d->height;
 
   const float scale = roi_in->scale / piece->iscale;
-  roi_out->width -= (int)roundf((float)x * scale);
-  roi_out->height -= (int)roundf((float)y * scale);
+  roi_out->width -= round_smart((float)x * scale, x);
+  roi_out->height -= round_smart((float)y * scale, y);
 }
 
 void modify_roi_in(dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, const dt_iop_roi_t *const roi_out,
@@ -229,8 +251,8 @@ void modify_roi_in(dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, const d
   int32_t x = d->x + d->width, y = d->y + d->height;
 
   const float scale = roi_in->scale / piece->iscale;
-  roi_in->width += (int)roundf((float)x * scale);
-  roi_in->height += (int)roundf((float)y * scale);
+  roi_in->width += round_smart((float)x * scale, x);
+  roi_in->height += round_smart((float)y * scale, y);
 }
 
 void output_format(dt_iop_module_t *self, dt_dev_pixelpipe_t *pipe, dt_dev_pixelpipe_iop_t *piece,
@@ -254,26 +276,6 @@ static void adjust_xtrans_filters(dt_dev_pixelpipe_t *pipe,
       pipe->dsc.xtrans[j][i] = pipe->image.buf_dsc.xtrans[(j + crop_y) % 6][(i + crop_x) % 6];
     }
   }
-}
-
-// value to round,   reference on how to round:
-//  if ref was even, returned value will be even
-//  if ref was odd,  returned value will be odd
-static int round_smart(float val, int ref)
-{
-  // first, just round it
-  int round = (int)roundf(val);
-
-  if((ref & 1) ^ (round & 1)) round++;
-
-  return round;
-}
-
-static int compute_proper_crop(dt_dev_pixelpipe_iop_t *piece, const dt_iop_roi_t *const roi_in, int value)
-{
-  const float scale = roi_in->scale / piece->iscale;
-
-  return round_smart((float)value * scale, value);
 }
 
 static int BL(const dt_iop_roi_t *const roi_out, const dt_iop_rawprepare_data_t *const d, const int row,
@@ -711,12 +713,18 @@ void init_global(dt_iop_module_so_t *self)
 
 void init(dt_iop_module_t *self)
 {
-  const dt_image_t *const image = &(self->dev->image_storage);
 
   self->params = calloc(1, sizeof(dt_iop_rawprepare_params_t));
   self->default_params = calloc(1, sizeof(dt_iop_rawprepare_params_t));
   self->hide_enable_button = 1;
-  self->default_enabled = dt_image_is_raw(image) && !image_is_normalized(image);
+  self->default_enabled = 0;
+  if(self->dev)
+  { // just being extra careful here, because there is a case when old presets
+    // are upgraded and temporary modules are constructed for this, with a 0x0 dev
+    // pointer. i suppose the can be solved more elegantly on the other side.
+    const dt_image_t *const image = &(self->dev->image_storage);
+    self->default_enabled = dt_image_is_raw(image) && !image_is_normalized(image);
+  }
   self->priority = 14; // module order created by iop_dependencies.py, do not edit!
   self->params_size = sizeof(dt_iop_rawprepare_params_t);
   self->gui_data = NULL;
@@ -804,6 +812,7 @@ void gui_init(dt_iop_module_t *self)
   dt_iop_rawprepare_params_t *p = (dt_iop_rawprepare_params_t *)self->params;
 
   self->widget = gtk_box_new(GTK_ORIENTATION_VERTICAL, DT_BAUHAUS_SPACE);
+  dt_gui_add_help_link(self->widget, dt_get_help_url(self->op));
 
   g->box_raw = gtk_box_new(GTK_ORIENTATION_VERTICAL, DT_BAUHAUS_SPACE);
 

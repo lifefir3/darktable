@@ -122,8 +122,9 @@ static void PNGwriteRawProfile(png_struct *ping, png_info *ping_info, char *prof
   png_free(ping, text);
 }
 
-int write_image(dt_imageio_module_data_t *p_tmp, const char *filename, const void *ivoid, void *exif, int exif_len,
-                int imgid, int num, int total)
+int write_image(dt_imageio_module_data_t *p_tmp, const char *filename, const void *ivoid,
+                dt_colorspaces_color_profile_type_t over_type, const char *over_filename,
+                void *exif, int exif_len, int imgid, int num, int total)
 {
   dt_imageio_png_t *p = (dt_imageio_png_t *)p_tmp;
   const int width = p->width, height = p->height;
@@ -172,7 +173,7 @@ int write_image(dt_imageio_module_data_t *p_tmp, const char *filename, const voi
   // embed icc profile
   if(imgid > 0)
   {
-    cmsHPROFILE out_profile = dt_colorspaces_get_output_profile(imgid)->profile;
+    cmsHPROFILE out_profile = dt_colorspaces_get_output_profile(imgid, over_type, over_filename)->profile;
     uint32_t len = 0;
     cmsSaveProfileToMem(out_profile, 0, &len);
     if(len > 0)
@@ -514,7 +515,7 @@ void gui_init(dt_imageio_module_format_t *self)
 {
   dt_imageio_png_gui_t *gui = (dt_imageio_png_gui_t *)malloc(sizeof(dt_imageio_png_gui_t));
   self->gui_data = (void *)gui;
-  const int bpp = dt_conf_get_int("plugins/imageio/format/png/bpp");
+  int bpp = dt_conf_get_int("plugins/imageio/format/png/bpp");
 
   // PNG compression level might actually be zero!
   int compression = 5;
@@ -528,7 +529,12 @@ void gui_init(dt_imageio_module_format_t *self)
   dt_bauhaus_widget_set_label(gui->bit_depth, NULL, _("bit depth"));
   dt_bauhaus_combobox_add(gui->bit_depth, _("8 bit"));
   dt_bauhaus_combobox_add(gui->bit_depth, _("16 bit"));
-  dt_bauhaus_combobox_set(gui->bit_depth, bpp);
+  if(bpp == 16)
+    dt_bauhaus_combobox_set(gui->bit_depth, 1);
+  else {
+    bpp = 8; // We know only about 8 or 16 bits, at least for now
+    dt_bauhaus_combobox_set(gui->bit_depth, 0);
+  }
   gtk_box_pack_start(GTK_BOX(self->widget), gui->bit_depth, TRUE, TRUE, 0);
   g_signal_connect(G_OBJECT(gui->bit_depth), "value-changed", G_CALLBACK(bit_depth_changed), NULL);
 

@@ -35,6 +35,7 @@
 #include "gui/accelerators.h"
 #include "gui/gtk.h"
 #include "iop/iop_api.h"
+#include "common/iop_group.h"
 
 #include <gtk/gtk.h>
 #include <inttypes.h>
@@ -72,6 +73,7 @@ typedef struct dt_iop_highlights_global_data_t
   int kernel_highlights_4f_clip;
 } dt_iop_highlights_global_data_t;
 
+
 const char *name()
 {
   return _("highlight reconstruction");
@@ -79,7 +81,7 @@ const char *name()
 
 int groups()
 {
-  return IOP_GROUP_BASIC;
+  return dt_iop_get_group("highlight reconstruction", IOP_GROUP_BASIC);
 }
 
 int flags()
@@ -289,7 +291,7 @@ static inline void interpolate_color_xtrans(const void *const ivoid, void *const
 {
   // In Bayer each row/col has only green/red or green/blue
   // transitions, hence can reconstruct color by single ratio per
-  // row. In x-trans there can be transitions between arbitary colors
+  // row. In x-trans there can be transitions between arbitrary colors
   // in a row/col (and 2x2 green blocks which provide no color
   // transition information). Hence calculate multiple color ratios
   // for each row/col.
@@ -1023,7 +1025,7 @@ void init(dt_iop_module_t *module)
   // module->data = malloc(sizeof(dt_iop_highlights_data_t));
   module->params = calloc(1, sizeof(dt_iop_highlights_params_t));
   module->default_params = calloc(1, sizeof(dt_iop_highlights_params_t));
-  module->priority = 58; // module order created by iop_dependencies.py, do not edit!
+  module->priority = 57; // module order created by iop_dependencies.py, do not edit!
   module->default_enabled = 1;
   module->params_size = sizeof(dt_iop_highlights_params_t);
   module->gui_data = NULL;
@@ -1042,6 +1044,7 @@ void gui_init(struct dt_iop_module_t *self)
   dt_iop_highlights_params_t *p = (dt_iop_highlights_params_t *)self->params;
 
   self->widget = gtk_box_new(GTK_ORIENTATION_VERTICAL, DT_BAUHAUS_SPACE);
+  dt_gui_add_help_link(self->widget, dt_get_help_url(self->op));
 
   g->mode = dt_bauhaus_combobox_new(self);
   gtk_box_pack_start(GTK_BOX(self->widget), g->mode, TRUE, TRUE, 0);

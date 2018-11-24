@@ -32,6 +32,7 @@
 #include "gui/gtk.h"
 #include "gui/presets.h"
 #include "iop/iop_api.h"
+#include "common/iop_group.h"
 #include <inttypes.h>
 #include <math.h>
 #include <stdlib.h>
@@ -91,7 +92,7 @@ int flags()
 
 int groups()
 {
-  return IOP_GROUP_EFFECT;
+  return dt_iop_get_group("lowlight vision", IOP_GROUP_EFFECT);
 }
 
 
@@ -288,7 +289,7 @@ void init(dt_iop_module_t *module)
   module->params = calloc(1, sizeof(dt_iop_lowlight_params_t));
   module->default_params = calloc(1, sizeof(dt_iop_lowlight_params_t));
   module->default_enabled = 0; // we're a rather slow and rare op.
-  module->priority = 617; // module order created by iop_dependencies.py, do not edit!
+  module->priority = 614; // module order created by iop_dependencies.py, do not edit!
   module->params_size = sizeof(dt_iop_lowlight_params_t);
   module->gui_data = NULL;
   dt_iop_lowlight_params_t tmp;
@@ -833,6 +834,7 @@ void gui_init(struct dt_iop_module_t *self)
   c->mouse_radius = 1.0 / DT_IOP_LOWLIGHT_BANDS;
 
   self->widget = gtk_box_new(GTK_ORIENTATION_VERTICAL, DT_BAUHAUS_SPACE);
+  dt_gui_add_help_link(self->widget, dt_get_help_url(self->op));
 
   c->area = GTK_DRAWING_AREA(dtgtk_drawing_area_new_with_aspect_ratio(0.75));
 
@@ -840,8 +842,7 @@ void gui_init(struct dt_iop_module_t *self)
 
   gtk_widget_add_events(GTK_WIDGET(c->area), GDK_POINTER_MOTION_MASK | GDK_POINTER_MOTION_HINT_MASK
                                              | GDK_BUTTON_PRESS_MASK | GDK_BUTTON_RELEASE_MASK
-                                             | GDK_LEAVE_NOTIFY_MASK | GDK_SCROLL_MASK
-                                             | GDK_SMOOTH_SCROLL_MASK);
+                                             | GDK_LEAVE_NOTIFY_MASK | darktable.gui->scroll_mask);
   g_signal_connect(G_OBJECT(c->area), "draw", G_CALLBACK(lowlight_draw), self);
   g_signal_connect(G_OBJECT(c->area), "button-press-event", G_CALLBACK(lowlight_button_press), self);
   g_signal_connect(G_OBJECT(c->area), "button-release-event", G_CALLBACK(lowlight_button_release), self);

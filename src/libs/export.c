@@ -508,11 +508,13 @@ void gui_init(dt_lib_module_t *self)
   dt_lib_export_t *d = (dt_lib_export_t *)malloc(sizeof(dt_lib_export_t));
   self->data = (void *)d;
   self->widget = gtk_box_new(GTK_ORIENTATION_VERTICAL, DT_PIXEL_APPLY_DPI(5));
+  dt_gui_add_help_link(self->widget, dt_get_help_url(self->plugin_name));
 
   GtkWidget *label;
 
   label = dt_ui_section_label_new(_("storage options"));
   gtk_box_pack_start(GTK_BOX(self->widget), label, FALSE, TRUE, 0);
+  dt_gui_add_help_link(self->widget, "export_selected.html#export_selected_usage");
 
   d->storage = dt_bauhaus_combobox_new(NULL);
   dt_bauhaus_widget_set_label(d->storage, NULL, _("target storage"));
@@ -541,6 +543,7 @@ void gui_init(dt_lib_module_t *self)
   label = dt_ui_section_label_new(_("format options"));
   gtk_widget_set_margin_top(label, DT_PIXEL_APPLY_DPI(20));
   gtk_box_pack_start(GTK_BOX(self->widget), label, FALSE, TRUE, 0);
+  dt_gui_add_help_link(self->widget, "export_selected.html#export_selected_usage");
 
   d->format = dt_bauhaus_combobox_new(NULL);
   dt_bauhaus_widget_set_label(d->format, NULL, _("file format"));
@@ -564,6 +567,7 @@ void gui_init(dt_lib_module_t *self)
   label = dt_ui_section_label_new(_("global options"));
   gtk_widget_set_margin_top(label, DT_PIXEL_APPLY_DPI(20));
   gtk_box_pack_start(GTK_BOX(self->widget), label, FALSE, TRUE, 0);
+  dt_gui_add_help_link(self->widget, "export_selected.html#export_selected_usage");
 
   d->width = GTK_SPIN_BUTTON(gtk_spin_button_new_with_range(0, EXPORT_MAX_IMAGE_SIZE, 1));
   gtk_widget_set_tooltip_text(GTK_WIDGET(d->width), _("maximum output width\nset to 0 for no scaling"));
@@ -610,10 +614,14 @@ void gui_init(dt_lib_module_t *self)
   }
 
   dt_bauhaus_combobox_set(d->profile, 0);
-  char tooltip[1024];
-  snprintf(tooltip, sizeof(tooltip), _("output ICC profiles in %s/color/out or %s/color/out"), confdir,
-           datadir);
+
+  char *system_profile_dir = g_build_filename(datadir, "color", "out", NULL);
+  char *user_profile_dir = g_build_filename(confdir, "color", "out", NULL);
+  char *tooltip = g_strdup_printf(_("output ICC profiles in %s or %s"), user_profile_dir, system_profile_dir);
   gtk_widget_set_tooltip_text(d->profile, tooltip);
+  g_free(system_profile_dir);
+  g_free(user_profile_dir);
+  g_free(tooltip);
 
   //  Add intent combo
 
@@ -1002,7 +1010,7 @@ void *get_params(dt_lib_module_t *self, int *size)
   void *sdata = mstorage->get_params(mstorage);
   int32_t fversion = mformat->version();
   int32_t sversion = mstorage->version();
-  // we allow null pointers (plugin not ready for export in current state), and just dont copy back the
+  // we allow null pointers (plugin not ready for export in current state), and just don't copy back the
   // settings later:
   if(!sdata) ssize = 0;
   if(!fdata) fsize = 0;

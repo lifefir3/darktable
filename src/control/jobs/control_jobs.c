@@ -45,6 +45,9 @@
 #ifdef __APPLE__
 #include "osx/osx.h"
 #endif
+#ifdef _WIN32
+#include "win/dtwin.h"
+#endif
 
 typedef struct dt_control_time_offset_t
 {
@@ -292,8 +295,9 @@ static float envelope(const float xx)
 }
 
 static int dt_control_merge_hdr_process(dt_imageio_module_data_t *datai, const char *filename,
-                                        const void *const ivoid, void *exif, int exif_len, int imgid, int num,
-                                        int total)
+                                        const void *const ivoid,
+                                        dt_colorspaces_color_profile_type_t over_type, const char *over_filename,
+                                        void *exif, int exif_len, int imgid, int num, int total)
 {
   dt_control_merge_hdr_format_t *data = (dt_control_merge_hdr_format_t *)datai;
   dt_control_merge_hdr_t *d = data->d;
@@ -546,9 +550,11 @@ static int32_t dt_control_flip_images_job_run(dt_job_t *job)
     dt_image_flip(imgid, cw);
     t = g_list_delete_link(t, t);
     fraction = 1.0 / total;
+    dt_image_set_aspect_ratio(imgid);
     dt_control_job_set_progress(job, fraction);
   }
   params->index = NULL;
+  dt_control_signal_raise(darktable.signals, DT_SIGNAL_COLLECTION_CHANGED);
   dt_control_queue_redraw_center();
   return 0;
 }
@@ -590,7 +596,7 @@ static GList *_get_full_pathname(char *imgs)
   sqlite3_stmt *stmt = NULL;
   GList *list = NULL;
 
-  DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db), "SELECT DISTINCT folder || '/' || filename FROM "
+  DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db), "SELECT DISTINCT folder || '" G_DIR_SEPARATOR_S "' || filename FROM "
                                                              "main.images i, main.film_rolls f "
                                                              "ON i.film_id = f.id WHERE i.id IN (?1)",
                               -1, &stmt, NULL);
@@ -778,11 +784,13 @@ static enum _dt_delete_status delete_file_from_disk(const char *filename)
     GError *gerror = NULL;
     if (send_to_trash)
     {
-      #ifdef __APPLE__
+#ifdef __APPLE__
       delete_success = dt_osx_file_trash(filename, &gerror);
-      #else
+#elif defined(_WIN32)
+      delete_success = dt_win_file_trash(gfile, NULL /*cancellable*/, &gerror);
+#else
       delete_success = g_file_trash(gfile, NULL /*cancellable*/, &gerror);
-      #endif
+#endif
     }
     else
     {
@@ -939,7 +947,7 @@ static int32_t dt_control_delete_images_job_run(dt_job_t *job)
           do
           {
             char *xmp_filename = g_utf16_to_utf8(data.cFileName, -1, NULL, NULL, NULL);
-            files = g_list_append(files, g_build_filename(dirname, xmp_filename));
+            files = g_list_append(files, g_build_filename(dirname, xmp_filename, NULL));
             g_free(xmp_filename);
           }
           while(FindNextFileW(handle, &data));
@@ -1379,7 +1387,7 @@ gboolean dt_control_remove_images()
       number = 1;
     else
       number = dt_collection_get_selected_count(darktable.collection);
-    
+
     // Do not show the dialog if no image is selected:
     if(number == 0)
     {

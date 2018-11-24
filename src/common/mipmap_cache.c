@@ -1106,8 +1106,9 @@ static int _bpp(dt_imageio_module_data_t *data)
   return 8;
 }
 
-static int _write_image(dt_imageio_module_data_t *data, const char *filename, const void *in, void *exif,
-                        int exif_len, int imgid, int num, int total)
+static int _write_image(dt_imageio_module_data_t *data, const char *filename, const void *in,
+                        dt_colorspaces_color_profile_type_t over_type, const char *over_filename,
+                        void *exif, int exif_len, int imgid, int num, int total)
 {
   _dummy_data_t *d = (_dummy_data_t *)data;
   memcpy(d->buf, in, data->width * data->height * sizeof(uint32_t));
@@ -1123,7 +1124,7 @@ static void _init_8(uint8_t *buf, uint32_t *width, uint32_t *height, float *isca
   char filename[PATH_MAX] = { 0 };
   gboolean from_cache = TRUE;
 
-  /* do not even try to process file if it isnt available */
+  /* do not even try to process file if it isn't available */
   dt_image_full_path(imgid, filename, sizeof(filename), &from_cache);
   if(!*filename || !g_file_test(filename, G_FILE_TEST_EXISTS))
   {

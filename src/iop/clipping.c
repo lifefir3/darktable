@@ -34,6 +34,7 @@
 #include "gui/guides.h"
 #include "gui/presets.h"
 #include "iop/iop_api.h"
+#include "common/iop_group.h"
 
 #include <assert.h>
 #include <gdk/gdkkeysyms.h>
@@ -290,6 +291,7 @@ static void adjust_aabb(const float *p, float *aabb)
   aabb[3] = fmaxf(aabb[3], p[1]);
 }
 
+
 const char *name()
 {
   return _("crop and rotate");
@@ -297,7 +299,7 @@ const char *name()
 
 int groups()
 {
-  return IOP_GROUP_BASIC;
+  return dt_iop_get_group("crop and rotate", IOP_GROUP_BASIC);
 }
 
 int flags()
@@ -1689,7 +1691,7 @@ void init(dt_iop_module_t *module)
   module->default_enabled = 0;
   module->params_size = sizeof(dt_iop_clipping_params_t);
   module->gui_data = NULL;
-  module->priority = 455; // module order created by iop_dependencies.py, do not edit!
+  module->priority = 285; // module order created by iop_dependencies.py, do not edit!
 }
 
 void cleanup(dt_iop_module_t *module)
@@ -1859,6 +1861,7 @@ void gui_init(struct dt_iop_module_t *self)
   g->old_width = g->old_height = -1;
 
   self->widget = gtk_box_new(GTK_ORIENTATION_VERTICAL, DT_BAUHAUS_SPACE);
+  dt_gui_add_help_link(self->widget, dt_get_help_url(self->op));
   g->hvflip = dt_bauhaus_combobox_new(self);
   dt_bauhaus_widget_set_label(g->hvflip, NULL, _("flip"));
   dt_bauhaus_combobox_add(g->hvflip, _("none"));
@@ -2007,7 +2010,7 @@ void gui_init(struct dt_iop_module_t *self)
   g_signal_connect(G_OBJECT(g->aspect_presets), "value-changed", G_CALLBACK(aspect_presets_changed), self);
   gtk_widget_set_tooltip_text(g->aspect_presets, _("set the aspect ratio\n"
                                                    "the list is sorted: from most square to least square"));
-  dt_bauhaus_widget_set_quad_paint(g->aspect_presets, dtgtk_cairo_paint_aspectflip, 0);
+  dt_bauhaus_widget_set_quad_paint(g->aspect_presets, dtgtk_cairo_paint_aspectflip, 0, NULL);
   g_signal_connect(G_OBJECT(g->aspect_presets), "quad-pressed", G_CALLBACK(aspect_flip), self);
   gtk_box_pack_start(GTK_BOX(self->widget), g->aspect_presets, TRUE, TRUE, 0);
 
@@ -2155,7 +2158,7 @@ void gui_post_expose(struct dt_iop_module_t *self, cairo_t *cr, int32_t width, i
   float zoom_x = dt_control_get_dev_zoom_x();
   dt_dev_zoom_t zoom = dt_control_get_dev_zoom();
   int closeup = dt_control_get_dev_closeup();
-  float zoom_scale = dt_dev_get_zoom_scale(dev, zoom, closeup ? 2 : 1, 1);
+  float zoom_scale = dt_dev_get_zoom_scale(dev, zoom, 1<<closeup, 1);
 
   cairo_translate(cr, width / 2.0, height / 2.0f);
   cairo_scale(cr, zoom_scale, zoom_scale);
@@ -2567,7 +2570,7 @@ int mouse_moved(struct dt_iop_module_t *self, double x, double y, double pressur
   const float ht = self->dev->preview_pipe->backbuf_height;
   dt_dev_zoom_t zoom = dt_control_get_dev_zoom();
   int closeup = dt_control_get_dev_closeup();
-  float zoom_scale = dt_dev_get_zoom_scale(self->dev, zoom, closeup ? 2 : 1, 1);
+  float zoom_scale = dt_dev_get_zoom_scale(self->dev, zoom, 1<<closeup, 1);
   float pzx, pzy;
   dt_dev_get_pointer_zoom_pos(self->dev, x, y, &pzx, &pzy);
   pzx += 0.5f;
@@ -2975,7 +2978,7 @@ int button_pressed(struct dt_iop_module_t *self, double x, double y, double pres
       {
         dt_dev_zoom_t zoom = dt_control_get_dev_zoom();
         int closeup = dt_control_get_dev_closeup();
-        float zoom_scale = dt_dev_get_zoom_scale(self->dev, zoom, closeup ? 2 : 1, 1);
+        float zoom_scale = dt_dev_get_zoom_scale(self->dev, zoom, 1<<closeup, 1);
         float pzx, pzy;
         dt_dev_get_pointer_zoom_pos(self->dev, x, y, &pzx, &pzy);
         pzx += 0.5f;

@@ -26,6 +26,8 @@
 #include "common/dlopencl.h"
 #include "common/gaussian.h"
 #include "common/interpolation.h"
+#include "common/dwt.h"
+#include "common/heal.h"
 #include "common/nvidia_gpus.h"
 #include "common/opencl_drivers_blacklist.h"
 #include "control/conf.h"
@@ -359,7 +361,7 @@ static int dt_opencl_device_init(dt_opencl_t *cl, const int dev, cl_device_id *d
   for(int i = 0; i < len; i++)
     if(isalnum(infostr[i])) devname[j++] = infostr[i];
   devname[j] = 0;
-  snprintf(cachedir, sizeof(cachedir), "%s/cached_kernels_for_%s", dtcache, devname);
+  snprintf(cachedir, sizeof(cachedir), "%s" G_DIR_SEPARATOR_S "cached_kernels_for_%s", dtcache, devname);
   if(g_mkdir_with_parents(cachedir, 0700) == -1)
   {
     dt_print(DT_DEBUG_OPENCL, "[opencl_init] failed to create directory `%s'!\n", cachedir);
@@ -372,16 +374,27 @@ static int dt_opencl_device_init(dt_opencl_t *cl, const int dev, cl_device_id *d
   char confentry[PATH_MAX] = { 0 };
   char binname[PATH_MAX] = { 0 };
   dt_loc_get_datadir(dtpath, sizeof(dtpath));
-  snprintf(filename, sizeof(filename), "%s/kernels/programs.conf", dtpath);
+  snprintf(filename, sizeof(filename), "%s" G_DIR_SEPARATOR_S "kernels" G_DIR_SEPARATOR_S "programs.conf", dtpath);
   char kerneldir[PATH_MAX] = { 0 };
-  snprintf(kerneldir, sizeof(kerneldir), "%s/kernels", dtpath);
+  snprintf(kerneldir, sizeof(kerneldir), "%s" G_DIR_SEPARATOR_S "kernels", dtpath);
+  char *escapedkerneldir = NULL;
+#ifndef __APPLE__
+  escapedkerneldir = g_strdup_printf("\"%s\"", kerneldir);
+#else
+  escapedkerneldir = dt_util_str_replace(kerneldir, " ", "\\ ");
+#endif
 
-  options = g_strdup_printf("-cl-fast-relaxed-math %s -D%s=1 -I\"%s\"",
+  options = g_strdup_printf("-cl-fast-relaxed-math %s -D%s=1 -I%s",
                             (cl->dev[dev].nvidia_sm_20 ? " -DNVIDIA_SM_20=1" : ""),
-                            dt_opencl_get_vendor_by_id(vendor_id), kerneldir);
+                            dt_opencl_get_vendor_by_id(vendor_id), escapedkerneldir);
   cl->dev[dev].options = strdup(options);
+
+  dt_print(DT_DEBUG_OPENCL, "[opencl_init] options for OpenCL compiler: %s\n", options);
+
   g_free(options);
   options = NULL;
+  g_free(escapedkerneldir);
+  escapedkerneldir = NULL;
 
   const char *clincludes[DT_OPENCL_MAX_INCLUDES] = { "colorspace.cl", "common.h", NULL };
   char *includemd5[DT_OPENCL_MAX_INCLUDES] = { NULL };
@@ -435,8 +448,8 @@ static int dt_opencl_device_init(dt_opencl_t *cl, const int dev, cl_device_id *d
         continue;
       }
 
-      snprintf(filename, sizeof(filename), "%s/kernels/%s", dtpath, programname);
-      snprintf(binname, sizeof(binname), "%s/%s.bin", cachedir, programname);
+      snprintf(filename, sizeof(filename), "%s" G_DIR_SEPARATOR_S "kernels" G_DIR_SEPARATOR_S "%s", dtpath, programname);
+      snprintf(binname, sizeof(binname), "%s" G_DIR_SEPARATOR_S "%s.bin", cachedir, programname);
       dt_print(DT_DEBUG_OPENCL, "[opencl_init] compiling program `%s' ..\n", programname);
       int loaded_cached;
       char md5sum[33];
@@ -707,6 +720,8 @@ finally:
     cl->gaussian = dt_gaussian_init_cl_global();
     cl->interpolation = dt_interpolation_init_cl_global();
     cl->local_laplacian = dt_local_laplacian_init_cl_global();
+    cl->dwt = dt_dwt_init_cl_global();
+    cl->heal = dt_heal_init_cl_global();
 
     char checksum[64];
     snprintf(checksum, sizeof(checksum), "%u", cl->crc);
@@ -741,7 +756,7 @@ finally:
       {
         // set scheduling profile to "multiple GPUs" if more than one device has been found
         dt_conf_set_string("opencl_scheduling_profile", "multiple GPUs");
-        dt_print(DT_DEBUG_OPENCL, "[opencl_init] set scheduling profile for multipe GPUs.\n");
+        dt_print(DT_DEBUG_OPENCL, "[opencl_init] set scheduling profile for multiple GPUs.\n");
         dt_control_log(_("multiple GPUs detected - opencl scheduling profile has been set accordingly."));
       }
       else if(tcpu >= 6.0f * tgpumin)
@@ -808,6 +823,9 @@ void dt_opencl_cleanup(dt_opencl_t *cl)
     dt_bilateral_free_cl_global(cl->bilateral);
     dt_gaussian_free_cl_global(cl->gaussian);
     dt_interpolation_free_cl_global(cl->interpolation);
+    dt_dwt_free_cl_global(cl->dwt);
+    dt_heal_free_cl_global(cl->heal);
+
     for(int i = 0; i < cl->num_devs; i++)
     {
       dt_pthread_mutex_destroy(&cl->dev[i].lock);
@@ -820,8 +838,8 @@ void dt_opencl_cleanup(dt_opencl_t *cl)
 
       if(cl->print_statistics && (darktable.unmuted & DT_DEBUG_MEMORY))
       {
-        dt_print(DT_DEBUG_OPENCL, "[opencl_summary_statistics] device '%s' (%d): peak memory usage %zu bytes\n",
-                   cl->dev[i].name, i, cl->dev[i].peak_memory);
+        dt_print(DT_DEBUG_OPENCL, "[opencl_summary_statistics] device '%s' (%d): peak memory usage %zu bytes (%.1f MB)\n",
+                   cl->dev[i].name, i, cl->dev[i].peak_memory, (float)cl->dev[i].peak_memory/(1024*1024));
       }
 
       if(cl->print_statistics && cl->use_events)
@@ -1371,7 +1389,7 @@ int dt_opencl_lock_device(const int pipetype)
 
       while(*prio != -1)
       {
-        if(!dt_pthread_mutex_trylock(&cl->dev[*prio].lock))
+        if(!dt_pthread_mutex_BAD_trylock(&cl->dev[*prio].lock))
         {
           int devid = *prio;
           free(priority);
@@ -1395,7 +1413,7 @@ int dt_opencl_lock_device(const int pipetype)
     for(int try_dev = 0; try_dev < cl->num_devs; try_dev++)
     {
       // get first currently unused processor
-      if(!dt_pthread_mutex_trylock(&cl->dev[try_dev].lock)) return try_dev;
+      if(!dt_pthread_mutex_BAD_trylock(&cl->dev[try_dev].lock)) return try_dev;
     }
   }
 
@@ -1446,7 +1464,7 @@ void dt_opencl_md5sum(const char **files, char **md5sums)
       continue;
     }
 
-    snprintf(filename, sizeof(filename), "%s/kernels/%s", dtpath, *files);
+    snprintf(filename, sizeof(filename), "%s" G_DIR_SEPARATOR_S "kernels" G_DIR_SEPARATOR_S "%s", dtpath, *files);
 
     struct stat filestat;
     FILE *f = fopen_stat(filename, &filestat);
@@ -1622,7 +1640,7 @@ int dt_opencl_load_program(const int dev, const int prog, const char *filename, 
     if(linkedfile_len > 0)
     {
       char link_dest[PATH_MAX] = { 0 };
-      snprintf(link_dest, sizeof(link_dest), "%s/%s", cachedir, linkedfile);
+      snprintf(link_dest, sizeof(link_dest), "%s" G_DIR_SEPARATOR_S "%s", cachedir, linkedfile);
       g_unlink(link_dest);
     }
     g_unlink(binname);
@@ -1748,7 +1766,7 @@ int dt_opencl_build_program(const int dev, const int prog, const char *binname, 
         {
           // save opencl compiled binary as md5sum-named file
           char link_dest[PATH_MAX] = { 0 };
-          snprintf(link_dest, sizeof(link_dest), "%s/%s", cachedir, md5sum);
+          snprintf(link_dest, sizeof(link_dest), "%s" G_DIR_SEPARATOR_S "%s", cachedir, md5sum);
           FILE *f = g_fopen(link_dest, "w");
           if(!f) goto ret;
           size_t bytes_written = fwrite(binaries[i], sizeof(char), binary_sizes[i], f);
@@ -1766,7 +1784,7 @@ int dt_opencl_build_program(const int dev, const int prog, const char *binname, 
           //CreateSymbolicLink in Windows requires admin privileges, which we don't want/need
           //store has using a simple filerename
           char finalfilename[PATH_MAX] = { 0 };
-          snprintf(finalfilename, sizeof(finalfilename), "%s/%s.%s", cachedir, bname, md5sum);
+          snprintf(finalfilename, sizeof(finalfilename), "%s" G_DIR_SEPARATOR_S "%s.%s", cachedir, bname, md5sum);
           rename(link_dest, finalfilename);
 #else
           if(symlink(md5sum, bname) != 0) goto ret;
@@ -2316,7 +2334,8 @@ void dt_opencl_memory_statistics(int devid, cl_mem mem, dt_opencl_memory_t actio
 
   if(darktable.unmuted & DT_DEBUG_MEMORY)
     dt_print(DT_DEBUG_OPENCL,
-              "[opencl memory] device %d: %zu bytes in use\n", devid, darktable.opencl->dev[devid].memory_in_use);
+              "[opencl memory] device %d: %zu bytes (%.1f MB) in use\n", devid, darktable.opencl->dev[devid].memory_in_use,
+                                      (float)darktable.opencl->dev[devid].memory_in_use/(1024*1024));
 }
 
 /** check if image size fit into limits given by OpenCL runtime */
@@ -2447,7 +2466,7 @@ static dt_opencl_scheduling_profile_t dt_opencl_get_scheduling_profile(void)
 static void dt_opencl_set_synchronization_timeout(int value)
 {
   darktable.opencl->opencl_synchronization_timeout = value;
-  dt_print(DT_DEBUG_OPENCL, "[opencl_synchronization_timeout] synchronization timout set to %d\n", value);
+  dt_print(DT_DEBUG_OPENCL, "[opencl_synchronization_timeout] synchronization timeout set to %d\n", value);
 }
 
 /** adjust opencl subsystem according to scheduling profile */

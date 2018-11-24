@@ -1045,7 +1045,7 @@ static int _tree_button_pressed(GtkWidget *treeview, GdkEventButton *event, dt_l
         while(forms)
         {
           dt_masks_form_t *form = (dt_masks_form_t *)forms->data;
-          if((form->type & DT_MASKS_CLONE) || form->formid == grpid)
+          if((form->type & (DT_MASKS_CLONE|DT_MASKS_NON_CLONE)) || form->formid == grpid)
           {
             forms = g_list_next(forms);
             continue;
@@ -1288,7 +1288,7 @@ static void _lib_masks_list_recurs(GtkTreeStore *treestore, GtkTreeIter *topleve
                                    int grp_id, dt_iop_module_t *module, int gstate, float opacity,
                                    dt_lib_masks_t *lm)
 {
-  if(form->type & DT_MASKS_CLONE) return;
+  if(form->type & (DT_MASKS_CLONE|DT_MASKS_NON_CLONE)) return;
   // we create the text entry
   char str[256] = "";
   g_strlcat(str, form->name, sizeof(str));
@@ -1538,7 +1538,7 @@ static void _lib_masks_selection_change(dt_lib_module_t *self, int selectid, int
   gboolean valid = gtk_tree_model_get_iter_first(model, &iter);
   while(valid)
   {
-    // we get the formid the the iter
+    // we get the formid from the iter
     GValue gv = {
       0,
     };
@@ -1570,7 +1570,7 @@ void gui_init(dt_lib_module_t *self)
   cairo_surface_t *inverse_cst = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, bs2, bs2);
   cairo_t *inverse_cr = cairo_create(inverse_cst);
   cairo_set_source_rgb(inverse_cr, 0.7, 0.7, 0.7);
-  dtgtk_cairo_paint_masks_inverse(inverse_cr, 0, 0, bs2, bs2, 0);
+  dtgtk_cairo_paint_masks_inverse(inverse_cr, 0, 0, bs2, bs2, 0, NULL);
   cairo_destroy(inverse_cr);
   data = cairo_image_surface_get_data(inverse_cst);
   dt_draw_cairo_to_gdk_pixbuf(data, bs2, bs2);
@@ -1580,7 +1580,7 @@ void gui_init(dt_lib_module_t *self)
   cairo_surface_t *union_cst = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, bs2, bs2);
   cairo_t *union_cr = cairo_create(union_cst);
   cairo_set_source_rgb(union_cr, 0.7, 0.7, 0.7);
-  dtgtk_cairo_paint_masks_union(union_cr, 0, 0, bs2, bs2, 0);
+  dtgtk_cairo_paint_masks_union(union_cr, 0, 0, bs2, bs2, 0, NULL);
   cairo_destroy(union_cr);
   data = cairo_image_surface_get_data(union_cst);
   dt_draw_cairo_to_gdk_pixbuf(data, bs2, bs2);
@@ -1590,7 +1590,7 @@ void gui_init(dt_lib_module_t *self)
   cairo_surface_t *intersection_cst = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, bs2, bs2);
   cairo_t *intersection_cr = cairo_create(intersection_cst);
   cairo_set_source_rgb(intersection_cr, 0.7, 0.7, 0.7);
-  dtgtk_cairo_paint_masks_intersection(intersection_cr, 0, 0, bs2, bs2, 0);
+  dtgtk_cairo_paint_masks_intersection(intersection_cr, 0, 0, bs2, bs2, 0, NULL);
   cairo_destroy(intersection_cr);
   data = cairo_image_surface_get_data(intersection_cst);
   dt_draw_cairo_to_gdk_pixbuf(data, bs2, bs2);
@@ -1600,7 +1600,7 @@ void gui_init(dt_lib_module_t *self)
   cairo_surface_t *difference_cst = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, bs2, bs2);
   cairo_t *difference_cr = cairo_create(difference_cst);
   cairo_set_source_rgb(difference_cr, 0.7, 0.7, 0.7);
-  dtgtk_cairo_paint_masks_difference(difference_cr, 0, 0, bs2, bs2, 0);
+  dtgtk_cairo_paint_masks_difference(difference_cr, 0, 0, bs2, bs2, 0, NULL);
   cairo_destroy(difference_cr);
   data = cairo_image_surface_get_data(difference_cst);
   dt_draw_cairo_to_gdk_pixbuf(data, bs2, bs2);
@@ -1610,7 +1610,7 @@ void gui_init(dt_lib_module_t *self)
   cairo_surface_t *exclusion_cst = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, bs2, bs2);
   cairo_t *exclusion_cr = cairo_create(exclusion_cst);
   cairo_set_source_rgb(exclusion_cr, 0.7, 0.7, 0.7);
-  dtgtk_cairo_paint_masks_exclusion(exclusion_cr, 0, 0, bs2, bs2, 0);
+  dtgtk_cairo_paint_masks_exclusion(exclusion_cr, 0, 0, bs2, bs2, 0, NULL);
   cairo_destroy(exclusion_cr);
   data = cairo_image_surface_get_data(exclusion_cst);
   dt_draw_cairo_to_gdk_pixbuf(data, bs2, bs2);
@@ -1620,7 +1620,7 @@ void gui_init(dt_lib_module_t *self)
   cairo_surface_t *used_cst = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, bs2, bs2);
   cairo_t *used_cr = cairo_create(used_cst);
   cairo_set_source_rgb(used_cr, 0.7, 0.7, 0.7);
-  dtgtk_cairo_paint_masks_used(used_cr, 0, 0, bs2, bs2, 0);
+  dtgtk_cairo_paint_masks_used(used_cr, 0, 0, bs2, bs2, 0, NULL);
   cairo_destroy(used_cr);
   data = cairo_image_surface_get_data(used_cst);
   dt_draw_cairo_to_gdk_pixbuf(data, bs2, bs2);
@@ -1629,20 +1629,21 @@ void gui_init(dt_lib_module_t *self)
 
   // initialise widgets
   self->widget = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+  dt_gui_add_help_link(self->widget, dt_get_help_url(self->plugin_name));
   GtkWidget *hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
 
   GtkWidget *label = gtk_label_new(_("created shapes"));
   gtk_box_pack_start(GTK_BOX(hbox), label, FALSE, TRUE, 0);
 
   d->bt_gradient
-      = dtgtk_togglebutton_new(dtgtk_cairo_paint_masks_gradient, CPF_STYLE_FLAT | CPF_DO_NOT_USE_BORDER);
+      = dtgtk_togglebutton_new(dtgtk_cairo_paint_masks_gradient, CPF_STYLE_FLAT | CPF_DO_NOT_USE_BORDER, NULL);
   g_signal_connect(G_OBJECT(d->bt_gradient), "button-press-event", G_CALLBACK(_bt_add_gradient), self);
   gtk_widget_set_tooltip_text(d->bt_gradient, _("add gradient"));
   gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(d->bt_gradient), FALSE);
   gtk_widget_set_size_request(GTK_WIDGET(d->bt_gradient), bs, bs);
   gtk_box_pack_end(GTK_BOX(hbox), d->bt_gradient, FALSE, FALSE, 0);
 
-  d->bt_path = dtgtk_togglebutton_new(dtgtk_cairo_paint_masks_path, CPF_STYLE_FLAT | CPF_DO_NOT_USE_BORDER);
+  d->bt_path = dtgtk_togglebutton_new(dtgtk_cairo_paint_masks_path, CPF_STYLE_FLAT | CPF_DO_NOT_USE_BORDER, NULL);
   g_signal_connect(G_OBJECT(d->bt_path), "button-press-event", G_CALLBACK(_bt_add_path), self);
   gtk_widget_set_tooltip_text(d->bt_path, _("add path"));
   gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(d->bt_path), FALSE);
@@ -1650,7 +1651,7 @@ void gui_init(dt_lib_module_t *self)
   gtk_box_pack_end(GTK_BOX(hbox), d->bt_path, FALSE, FALSE, bs);
 
   d->bt_ellipse
-      = dtgtk_togglebutton_new(dtgtk_cairo_paint_masks_ellipse, CPF_STYLE_FLAT | CPF_DO_NOT_USE_BORDER);
+      = dtgtk_togglebutton_new(dtgtk_cairo_paint_masks_ellipse, CPF_STYLE_FLAT | CPF_DO_NOT_USE_BORDER, NULL);
   g_signal_connect(G_OBJECT(d->bt_ellipse), "button-press-event", G_CALLBACK(_bt_add_ellipse), self);
   gtk_widget_set_tooltip_text(d->bt_ellipse, _("add ellipse"));
   gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(d->bt_ellipse), FALSE);
@@ -1658,14 +1659,14 @@ void gui_init(dt_lib_module_t *self)
   gtk_box_pack_end(GTK_BOX(hbox), d->bt_ellipse, FALSE, FALSE, 0);
 
   d->bt_circle
-      = dtgtk_togglebutton_new(dtgtk_cairo_paint_masks_circle, CPF_STYLE_FLAT | CPF_DO_NOT_USE_BORDER);
+      = dtgtk_togglebutton_new(dtgtk_cairo_paint_masks_circle, CPF_STYLE_FLAT | CPF_DO_NOT_USE_BORDER, NULL);
   g_signal_connect(G_OBJECT(d->bt_circle), "button-press-event", G_CALLBACK(_bt_add_circle), self);
   gtk_widget_set_tooltip_text(d->bt_circle, _("add circle"));
   gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(d->bt_circle), FALSE);
   gtk_widget_set_size_request(GTK_WIDGET(d->bt_circle), bs, bs);
   gtk_box_pack_end(GTK_BOX(hbox), d->bt_circle, FALSE, FALSE, bs);
 
-  d->bt_brush = dtgtk_togglebutton_new(dtgtk_cairo_paint_masks_brush, CPF_STYLE_FLAT | CPF_DO_NOT_USE_BORDER);
+  d->bt_brush = dtgtk_togglebutton_new(dtgtk_cairo_paint_masks_brush, CPF_STYLE_FLAT | CPF_DO_NOT_USE_BORDER, NULL);
   g_signal_connect(G_OBJECT(d->bt_brush), "button-press-event", G_CALLBACK(_bt_add_brush), self);
   gtk_widget_set_tooltip_text(d->bt_brush, _("add brush"));
   gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(d->bt_brush), FALSE);

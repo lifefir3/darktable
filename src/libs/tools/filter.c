@@ -137,12 +137,16 @@ void gui_init(dt_lib_module_t *self)
   d->sort = widget = gtk_combo_box_text_new();
   gtk_box_pack_start(GTK_BOX(self->widget), widget, FALSE, FALSE, 0);
   gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(widget), _("filename"));
-  gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(widget), _("time"));
-  gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(widget), _("rating"));
-  gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(widget), _("id"));
-  gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(widget), _("color label"));
-  gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(widget), _("group"));
-  gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(widget), _("full path"));
+  gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(widget), _("time")); // DT_COLLECTION_SORT_DATETIME
+  gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(widget), _("rating")); // DT_COLLECTION_SORT_RATING
+  gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(widget), _("id")); // DT_COLLECTION_SORT_ID
+  gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(widget), _("color label")); // DT_COLLECTION_SORT_COLOR
+  gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(widget), _("group")); // DT_COLLECTION_SORT_GROUP
+  gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(widget), _("full path")); // DT_COLLECTION_SORT_PAT
+  gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(widget), _("custom sort")); // DT_COLLECTION_SORT_CUSTOM_ORDER
+  gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(widget), _("title")); // DT_COLLECTION_SORT_TITLE
+  gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(widget), _("description")); // DT_COLLECTION_SORT_DESCRIPTION
+  gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(widget), _("aspect ratio")); // DT_COLLECTION_SORT_ASPECT_RATIO
 
   /* select the last selected value */
   gtk_combo_box_set_active(GTK_COMBO_BOX(widget), dt_collection_get_sort_field(darktable.collection));
@@ -151,10 +155,10 @@ void gui_init(dt_lib_module_t *self)
 
   /* reverse order checkbutton */
   d->reverse = widget
-      = dtgtk_togglebutton_new(dtgtk_cairo_paint_solid_arrow, CPF_DO_NOT_USE_BORDER | CPF_STYLE_BOX | CPF_DIRECTION_UP);
+      = dtgtk_togglebutton_new(dtgtk_cairo_paint_solid_arrow, CPF_DO_NOT_USE_BORDER | CPF_STYLE_BOX | CPF_DIRECTION_UP, NULL);
   if(darktable.collection->params.descending)
     dtgtk_togglebutton_set_paint(DTGTK_TOGGLEBUTTON(widget), dtgtk_cairo_paint_solid_arrow,
-                                 CPF_DO_NOT_USE_BORDER | CPF_STYLE_BOX | CPF_DIRECTION_DOWN);
+                                 CPF_DO_NOT_USE_BORDER | CPF_STYLE_BOX | CPF_DIRECTION_DOWN, NULL);
 
   gtk_box_pack_start(GTK_BOX(self->widget), widget, FALSE, FALSE, 0);
 
@@ -243,9 +247,9 @@ static void _lib_filter_reverse_button_changed(GtkDarktableToggleButton *widget,
   gboolean reverse = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(widget));
 
   if(reverse)
-    dtgtk_togglebutton_set_paint(widget, dtgtk_cairo_paint_solid_arrow, CPF_DO_NOT_USE_BORDER | CPF_STYLE_BOX | CPF_DIRECTION_DOWN);
+    dtgtk_togglebutton_set_paint(widget, dtgtk_cairo_paint_solid_arrow, CPF_DO_NOT_USE_BORDER | CPF_STYLE_BOX | CPF_DIRECTION_DOWN, NULL);
   else
-    dtgtk_togglebutton_set_paint(widget, dtgtk_cairo_paint_solid_arrow, CPF_DO_NOT_USE_BORDER | CPF_STYLE_BOX | CPF_DIRECTION_UP);
+    dtgtk_togglebutton_set_paint(widget, dtgtk_cairo_paint_solid_arrow, CPF_DO_NOT_USE_BORDER | CPF_STYLE_BOX | CPF_DIRECTION_UP, NULL);
   gtk_widget_queue_draw(GTK_WIDGET(widget));
 
   /* update last settings */

@@ -37,6 +37,7 @@
 #include "gui/gtk.h"
 #include "gui/presets.h"
 #include "iop/iop_api.h"
+#include "common/iop_group.h"
 
 #if defined(__SSE__)
 #include <xmmintrin.h>
@@ -134,6 +135,7 @@ typedef struct dt_iop_graduatednd_data_t
   float color1[4];   // inverted color (1 - c)
 } dt_iop_graduatednd_data_t;
 
+
 const char *name()
 {
   return _("graduated density");
@@ -147,7 +149,7 @@ int flags()
 
 int groups()
 {
-  return IOP_GROUP_EFFECT;
+  return dt_iop_get_group("graduated density", IOP_GROUP_EFFECT);
 }
 
 void init_key_accels(dt_iop_module_so_t *self)
@@ -402,7 +404,7 @@ void gui_post_expose(struct dt_iop_module_t *self, cairo_t *cr, int32_t width, i
   float zoom_x = dt_control_get_dev_zoom_x();
   dt_dev_zoom_t zoom = dt_control_get_dev_zoom();
   int closeup = dt_control_get_dev_closeup();
-  float zoom_scale = dt_dev_get_zoom_scale(dev, zoom, closeup ? 2 : 1, 1);
+  float zoom_scale = dt_dev_get_zoom_scale(dev, zoom, 1<<closeup, 1);
 
   cairo_translate(cr, width / 2.0, height / 2.0f);
   cairo_scale(cr, zoom_scale, zoom_scale);
@@ -491,7 +493,7 @@ int mouse_moved(struct dt_iop_module_t *self, double x, double y, double pressur
   dt_iop_graduatednd_gui_data_t *g = (dt_iop_graduatednd_gui_data_t *)self->gui_data;
   dt_dev_zoom_t zoom = dt_control_get_dev_zoom();
   int closeup = dt_control_get_dev_closeup();
-  float zoom_scale = dt_dev_get_zoom_scale(self->dev, zoom, closeup ? 2 : 1, 1);
+  float zoom_scale = dt_dev_get_zoom_scale(self->dev, zoom, 1<<closeup, 1);
   float pzx, pzy;
   dt_dev_get_pointer_zoom_pos(self->dev, x, y, &pzx, &pzy);
   pzx += 0.5f;
@@ -1084,7 +1086,7 @@ void init(dt_iop_module_t *module)
   module->params = calloc(1, sizeof(dt_iop_graduatednd_params_t));
   module->default_params = calloc(1, sizeof(dt_iop_graduatednd_params_t));
   module->default_enabled = 0;
-  module->priority = 279; // module order created by iop_dependencies.py, do not edit!
+  module->priority = 299; // module order created by iop_dependencies.py, do not edit!
   module->params_size = sizeof(dt_iop_graduatednd_params_t);
   module->gui_data = NULL;
   dt_iop_graduatednd_params_t tmp = (dt_iop_graduatednd_params_t){ 1.0, 0, 0, 50, 0, 0 };
@@ -1133,6 +1135,7 @@ void gui_init(struct dt_iop_module_t *self)
   dt_iop_graduatednd_params_t *p = (dt_iop_graduatednd_params_t *)self->params;
 
   self->widget = gtk_box_new(GTK_ORIENTATION_VERTICAL, DT_BAUHAUS_SPACE);
+  dt_gui_add_help_link(self->widget, dt_get_help_url(self->op));
 
   /* density */
   g->scale1 = dt_bauhaus_slider_new_with_range(self, -8.0, 8.0, 0.1, p->density, 2);

@@ -1,5 +1,5 @@
 
-IF(WIN32)
+IF(WIN32 AND NOT BUILD_MSYS2_INSTALL)
 
   set(plugin_dest_dir lib/darktable/plugins)
   set(APPS "\${CMAKE_INSTALL_PREFIX}/bin/darktable.exe")  # paths to executables
@@ -45,7 +45,9 @@ IF(WIN32)
         process_file(\"\${filename}\")
       endforeach()
 
-      list(REMOVE_DUPLICATES EXTRA_DEPS)
+      if(EXTRA_DEPS)
+        list(REMOVE_DUPLICATES EXTRA_DEPS)
+      endif()
 
       # install(...) doesn't work in here, and file(INSTALL ...) doesn't put anything into installers,
       # so we have to go over the list of files and do it manually
@@ -57,4 +59,4 @@ IF(WIN32)
 
   endif()
 
-ENDIF(WIN32)
+ENDIF(WIN32 AND NOT BUILD_MSYS2_INSTALL)

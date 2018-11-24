@@ -38,6 +38,7 @@
 #include "common/imageio_jpeg.h"
 #include "common/imageio_pfm.h"
 #include "common/imageio_png.h"
+#include "common/imageio_pnm.h"
 #include "common/imageio_rawspeed.h"
 #include "common/imageio_rgbe.h"
 #include "common/imageio_tiff.h"
@@ -62,6 +63,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+
+#ifdef USE_LUA
+#include "lua/image.h"
+#endif
 
 // load a full-res thumbnail:
 int dt_imageio_large_thumbnail(const char *filename, uint8_t **buffer, int32_t *width, int32_t *height,
@@ -388,6 +393,9 @@ static const uint8_t _imageio_ldr_magic[] = {
   /* Most CR2 */
   0x01, 0x00, 0x0a, 0x49, 0x49, 0x2a, 0x00, 0x10, 0x00, 0x00, 0x00, 0x43, 0x52,
 
+  /* CR3 (ISO Media) */
+  0x01, 0x00, 0x18, 0x00, 0x00, 0x00, 0x18, 'f', 't', 'y', 'p', 'c', 'r', 'x', ' ', 0x00, 0x00, 0x00, 0x01, 'c', 'r', 'x', ' ', 'i', 's', 'o', 'm',
+
   // Older Canon RAW format with TIF Extension (i.e. 1Ds and 1D)
   0x01, 0x00, 0x0a, 0x4d, 0x4d, 0x00, 0x2a, 0x00, 0x00, 0x00, 0x10, 0xba, 0xb0,
 
@@ -397,33 +405,50 @@ static const uint8_t _imageio_ldr_magic[] = {
   // Older Canon RAW format with TIF Extension (i.e. DCS1)
   0x01, 0x00, 0x0a, 0x49, 0x49, 0x2a, 0x00, 0x00, 0x03, 0x00, 0x00, 0xff, 0x01,
 
+  // Older Kodak RAW format with TIF Extension (i.e. DCS520C)
+  0x01, 0x00, 0x0a, 0x4d, 0x4d, 0x00, 0x2a, 0x00, 0x00, 0x11, 0xa8, 0x00, 0x04,
+
   // Older Kodak RAW format with TIF Extension (i.e. DCS560C)
   0x01, 0x00, 0x0a, 0x4d, 0x4d, 0x00, 0x2a, 0x00, 0x00, 0x11, 0x76, 0x00, 0x04,
 
   // Older Kodak RAW format with TIF Extension (i.e. DCS460D)
   0x01, 0x00, 0x0a, 0x49, 0x49, 0x2a, 0x00, 0x00, 0x03, 0x00, 0x00, 0x7c, 0x01,
 
+  /* IIQ raw images, may be either .IIQ, or .TIF */
+  0x01, 0x08, 0x04, 0x49, 0x49, 0x49, 0x49,
+
   /* tiff image, intel */
   0x00, 0x00, 0x04, 0x4d, 0x4d, 0x00, 0x2a,
 
   /* tiff image, motorola */
-  0x00, 0x00, 0x04, 0x49, 0x49, 0x2a, 0x00
+  0x00, 0x00, 0x04, 0x49, 0x49, 0x2a, 0x00,
+
+  /* binary NetPNM images: pbm, pgm and pbm */
+  0x00, 0x00, 0x02, 0x50, 0x34,
+  0x00, 0x00, 0x02, 0x50, 0x35,
+  0x00, 0x00, 0x02, 0x50, 0x36
 };
 
 gboolean dt_imageio_is_ldr(const char *filename)
 {
   size_t offset = 0;
-  uint8_t block[16] = { 0 };
+  uint8_t block[32] = { 0 }; // keep this big enough for whatever magic size we want to compare to!
   FILE *fin = g_fopen(filename, "rb");
   if(fin)
   {
     /* read block from file */
-    size_t s = fread(block, 16, 1, fin);
+    size_t s = fread(block, sizeof(block), 1, fin);
     fclose(fin);
 
     /* compare magic's */
     while(s)
     {
+      if(_imageio_ldr_magic[offset + 2] > sizeof(block)
+        || offset + 3 + _imageio_ldr_magic[offset + 2] > sizeof(_imageio_ldr_magic))
+      {
+        fprintf(stderr, "error: buffer in %s is too small!\n", __FUNCTION__);
+        return FALSE;
+      }
       if(memcmp(_imageio_ldr_magic + offset + 3, block + _imageio_ldr_magic[offset + 1],
                 _imageio_ldr_magic[offset + 2]) == 0)
       {
@@ -459,6 +484,18 @@ int dt_imageio_is_hdr(const char *filename)
 dt_imageio_retval_t dt_imageio_open_ldr(dt_image_t *img, const char *filename, dt_mipmap_buffer_t *buf)
 {
   dt_imageio_retval_t ret;
+
+  ret = dt_imageio_open_jpeg(img, filename, buf);
+  if(ret == DT_IMAGEIO_OK || ret == DT_IMAGEIO_CACHE_FULL)
+  {
+    img->buf_dsc.filters = 0u;
+    img->flags &= ~DT_IMAGE_RAW;
+    img->flags &= ~DT_IMAGE_HDR;
+    img->flags |= DT_IMAGE_LDR;
+    img->loader = LOADER_JPEG;
+    return ret;
+  }
+
   ret = dt_imageio_open_tiff(img, filename, buf);
   if(ret == DT_IMAGEIO_OK || ret == DT_IMAGEIO_CACHE_FULL)
   {
@@ -494,14 +531,14 @@ dt_imageio_retval_t dt_imageio_open_ldr(dt_image_t *img, const char *filename, d
   }
 #endif
 
-  ret = dt_imageio_open_jpeg(img, filename, buf);
+  ret = dt_imageio_open_pnm(img, filename, buf);
   if(ret == DT_IMAGEIO_OK || ret == DT_IMAGEIO_CACHE_FULL)
   {
     img->buf_dsc.filters = 0u;
     img->flags &= ~DT_IMAGE_RAW;
     img->flags &= ~DT_IMAGE_HDR;
     img->flags |= DT_IMAGE_LDR;
-    img->loader = LOADER_JPEG;
+    img->loader = LOADER_PNM;
     return ret;
   }
 
@@ -533,7 +570,7 @@ int dt_imageio_export(const uint32_t imgid, const char *filename, dt_imageio_mod
 {
   if(strcmp(format->mime(format_params), "x-copy") == 0)
     /* This is a just a copy, skip process and just export */
-    return format->write_image(format_params, filename, NULL, NULL, 0, imgid, num, total);
+    return format->write_image(format_params, filename, NULL, icc_type, icc_filename, NULL, 0, imgid, num, total);
   else
     return dt_imageio_export_with_flags(imgid, filename, format, format_params, 0, 0, high_quality, upscale,
                                         0, NULL, copy_metadata, icc_type, icc_filename, icc_intent, storage,
@@ -653,6 +690,7 @@ int dt_imageio_export_with_flags(const uint32_t imgid, const char *filename,
           h->module = style_module;
           h->multi_priority = s->multi_priority;
           g_strlcpy(h->multi_name, s->name, sizeof(h->multi_name));
+          g_strlcpy(h->op_name, m->op, sizeof(h->op_name));
 
           if(m->legacy_params && (s->module_version != m->version()))
           {
@@ -869,13 +907,14 @@ int dt_imageio_export_with_flags(const uint32_t imgid, const char *filename,
     // last param is dng mode, it's false here
     length = dt_exif_read_blob(&exif_profile, pathname, imgid, sRGB, processed_width, processed_height, 0);
 
-    res = format->write_image(format_params, filename, outbuf, exif_profile, length, imgid, num, total);
+    res = format->write_image(format_params, filename, outbuf, icc_type, icc_filename, exif_profile, length, imgid,
+                              num, total);
 
     free(exif_profile);
   }
   else
   {
-    res = format->write_image(format_params, filename, outbuf, NULL, 0, imgid, num, total);
+    res = format->write_image(format_params, filename, outbuf, icc_type, icc_filename, NULL, 0, imgid, num, total);
   }
 
   dt_dev_pixelpipe_cleanup(&pipe);
@@ -892,6 +931,28 @@ int dt_imageio_export_with_flags(const uint32_t imgid, const char *filename,
   if(!thumbnail_export && strcmp(format->mime(format_params), "memory")
     && !(format->flags(format_params) & FORMAT_FLAGS_NO_TMPFILE))
   {
+#ifdef USE_LUA
+    //Synchronous calling of lua intermediate-export-image events
+    dt_lua_lock();
+
+    lua_State *L = darktable.lua_state.state;
+
+    luaA_push(L, dt_lua_image_t, &imgid);
+
+    lua_pushstring(L, filename);
+
+    luaA_push_type(L, format->parameter_lua_type, format_params);
+
+    if (storage)
+      luaA_push_type(L, storage->parameter_lua_type, storage_params);
+    else
+      lua_pushnil(L);
+
+    dt_lua_event_trigger(L, "intermediate-export-image", 4);
+
+    dt_lua_unlock();
+#endif
+
     dt_control_signal_raise(darktable.signals, DT_SIGNAL_IMAGE_EXPORT_TMPFILE, imgid, filename, format,
                             format_params, storage, storage_params);
   }
@@ -949,7 +1010,7 @@ dt_imageio_retval_t dt_imageio_open(dt_image_t *img,               // non-const 
   /* silly check using file extensions: */
   if(ret != DT_IMAGEIO_OK && ret != DT_IMAGEIO_CACHE_FULL && dt_imageio_is_hdr(filename))
     ret = dt_imageio_open_hdr(img, filename, buf);
-  
+
   /* use rawspeed to load the raw */
   if(ret != DT_IMAGEIO_OK && ret != DT_IMAGEIO_CACHE_FULL)
   {

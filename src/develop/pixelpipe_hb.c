@@ -29,6 +29,7 @@
 #include "develop/imageop_math.h"
 #include "develop/pixelpipe.h"
 #include "develop/tiling.h"
+#include "develop/masks.h"
 #include "gui/gtk.h"
 #include "libs/colorpicker.h"
 #include "libs/lib.h"
@@ -152,6 +153,8 @@ int dt_dev_pixelpipe_init_cached(dt_dev_pixelpipe_t *pipe, size_t size, int32_t 
   pipe->icc_type = DT_COLORSPACE_NONE;
   pipe->icc_filename = NULL;
   pipe->icc_intent = DT_INTENT_LAST;
+  pipe->iop = NULL;
+  pipe->forms = NULL;
 
   return 1;
 }
@@ -172,7 +175,7 @@ void dt_dev_pixelpipe_set_icc(dt_dev_pixelpipe_t *pipe, dt_colorspaces_color_pro
 {
   pipe->icc_type = icc_type;
   g_free(pipe->icc_filename);
-  pipe->icc_filename = g_strdup(icc_filename);
+  pipe->icc_filename = g_strdup(icc_filename?icc_filename:"");
   pipe->icc_intent = icc_intent;
 }
 
@@ -190,6 +193,12 @@ void dt_dev_pixelpipe_cleanup(dt_dev_pixelpipe_t *pipe)
   pipe->icc_type = DT_COLORSPACE_NONE;
   g_free(pipe->icc_filename);
   pipe->icc_filename = NULL;
+
+  if (pipe->forms)
+  {
+    g_list_free_full(pipe->forms, (void (*)(void *))dt_masks_free_form);
+    pipe->forms = NULL;
+  }
 }
 
 void dt_dev_pixelpipe_cleanup_nodes(dt_dev_pixelpipe_t *pipe)
@@ -214,6 +223,12 @@ void dt_dev_pixelpipe_cleanup_nodes(dt_dev_pixelpipe_t *pipe)
   }
   g_list_free(pipe->nodes);
   pipe->nodes = NULL;
+  // also cleanup iop here
+  if(pipe->iop)
+  {
+    g_list_free(pipe->iop);
+    pipe->iop = NULL;
+  }
   dt_pthread_mutex_unlock(&pipe->busy_mutex);
 }
 
@@ -222,8 +237,10 @@ void dt_dev_pixelpipe_create_nodes(dt_dev_pixelpipe_t *pipe, dt_develop_t *dev)
   dt_pthread_mutex_lock(&pipe->busy_mutex);
   pipe->shutdown = 0;
   g_assert(pipe->nodes == NULL);
+  g_assert(pipe->iop == NULL);
   // for all modules in dev:
-  GList *modules = dev->iop;
+  pipe->iop = g_list_copy(dev->iop);
+  GList *modules = pipe->iop;
   while(modules)
   {
     dt_iop_module_t *module = (dt_iop_module_t *)modules->data;
@@ -250,6 +267,7 @@ void dt_dev_pixelpipe_create_nodes(dt_dev_pixelpipe_t *pipe, dt_develop_t *dev)
       dt_iop_init_pipe(piece->module, pipe, piece);
       pipe->nodes = g_list_append(pipe->nodes, piece);
     }
+
     modules = g_list_next(modules);
   }
   dt_pthread_mutex_unlock(&pipe->busy_mutex);
@@ -1581,7 +1599,7 @@ static int dt_dev_pixelpipe_process_rec(dt_dev_pixelpipe_t *pipe, dt_develop_t *
       pixelpipe_flow |= (PIXELPIPE_FLOW_BLENDED_ON_CPU);
       pixelpipe_flow &= ~(PIXELPIPE_FLOW_BLENDED_ON_GPU);
     }
-#else
+#else // HAVE_OPENCL
     // histogram collection for module
     if((dev->gui_attached || !(piece->request_histogram & DT_REQUEST_ONLY_IN_GUI))
        && (piece->request_histogram & DT_REQUEST_ON))
@@ -1664,7 +1682,7 @@ static int dt_dev_pixelpipe_process_rec(dt_dev_pixelpipe_t *pipe, dt_develop_t *
     dt_develop_blend_process(module, piece, input, *output, &roi_in, roi_out);
     pixelpipe_flow |= (PIXELPIPE_FLOW_BLENDED_ON_CPU);
     pixelpipe_flow &= ~(PIXELPIPE_FLOW_BLENDED_ON_GPU);
-#endif
+#endif // HAVE_OPENCL
 
     char histogram_log[32] = "";
     if(!(pixelpipe_flow & PIXELPIPE_FLOW_HISTOGRAM_NONE))
@@ -1791,7 +1809,7 @@ static int dt_dev_pixelpipe_process_rec(dt_dev_pixelpipe_t *pipe, dt_develop_t *
       dt_pthread_mutex_unlock(&pipe->busy_mutex);
     }
 
-  post_process_collect_info:
+post_process_collect_info:
 
     dt_pthread_mutex_lock(&pipe->busy_mutex);
     if(pipe->shutdown)
@@ -1925,7 +1943,7 @@ static int dt_dev_pixelpipe_process_rec(dt_dev_pixelpipe_t *pipe, dt_develop_t *
             for(int k = 0; k < 3; k++)
             {
               darktable.lib->proxy.colorpicker.picked_color_rgb_min[k]
-                  = MIN(darktable.lib->proxy.colorpicker.picked_color_rgb_min[2 - k],
+                  = MIN(darktable.lib->proxy.colorpicker.picked_color_rgb_min[k],
                         pixel[4 * (roi_out->width * j + i) + 2 - k]);
               darktable.lib->proxy.colorpicker.picked_color_rgb_max[k]
                   = MAX(darktable.lib->proxy.colorpicker.picked_color_rgb_max[k],
@@ -2057,7 +2075,7 @@ static int dt_dev_pixelpipe_process_rec(dt_dev_pixelpipe_t *pipe, dt_develop_t *
 
       // calculate the waveform histogram. since this is drawn pixel by pixel we have to do it in the correct
       // size (thus the weird gui stuff :().
-      // this HAS to be done on the float input data, otherwise we get really ugly artefacts due to rounding
+      // this HAS to be done on the float input data, otherwise we get really ugly artifacts due to rounding
       // issues when putting colors into the bins.
       //       dt_pthread_mutex_lock(&dev->histogram_waveform_mutex);
       if(dev->histogram_waveform_width != 0 && input)
@@ -2265,9 +2283,13 @@ int dt_dev_pixelpipe_process(dt_dev_pixelpipe_t *pipe, dt_develop_t *dev, int x,
   // printf("pixelpipe homebrew process start\n");
   if(darktable.unmuted & DT_DEBUG_DEV) dt_dev_pixelpipe_cache_print(&pipe->cache);
 
+  // get a snapshot of mask list
+  if (pipe->forms) g_list_free_full(pipe->forms, (void (*)(void *))dt_masks_free_form);
+  pipe->forms = dt_masks_dup_forms_deep(dev->forms, NULL);
+
   //  go through list of modules from the end:
-  guint pos = g_list_length(dev->iop);
-  GList *modules = g_list_last(dev->iop);
+  guint pos = g_list_length(pipe->iop);
+  GList *modules = g_list_last(pipe->iop);
   GList *pieces = g_list_last(pipe->nodes);
 
 // re-entry point: in case of late opencl errors we start all over again with opencl-support disabled
@@ -2329,6 +2351,11 @@ restart:
   }
 
   // release resources:
+  if (pipe->forms)
+  {
+    g_list_free_full(pipe->forms, (void (*)(void *))dt_masks_free_form);
+    pipe->forms = NULL;
+  }
   if(pipe->devid >= 0)
   {
     dt_opencl_unlock_device(pipe->devid);
@@ -2365,7 +2392,7 @@ void dt_dev_pixelpipe_get_dimensions(dt_dev_pixelpipe_t *pipe, struct dt_develop
   dt_pthread_mutex_lock(&pipe->busy_mutex);
   dt_iop_roi_t roi_in = (dt_iop_roi_t){ 0, 0, width_in, height_in, 1.0 };
   dt_iop_roi_t roi_out;
-  GList *modules = dev->iop;
+  GList *modules = pipe->iop;
   GList *pieces = pipe->nodes;
   while(modules)
   {

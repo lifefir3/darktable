@@ -65,6 +65,24 @@ extern "C" {
 #include "common/tags.h"
 #include "control/conf.h"
 #include "develop/imageop.h"
+#include "develop/blend.h"
+#include "develop/masks.h"
+}
+
+// exiv2's readMetadata is not thread safe in 0.26. so we lock it. since readMetadata might throw an exception we
+// wrap it into some c++ magic to make sure we unlock in all cases. well, actually not magic but basic raii.
+// FIXME: check again once we rely on 0.27
+class Lock
+{
+public:
+  Lock() { dt_pthread_mutex_lock(&darktable.exiv2_threadsafe); }
+  ~Lock() { dt_pthread_mutex_unlock(&darktable.exiv2_threadsafe); }
+};
+
+#define read_metadata_threadsafe(image)                       \
+{                                                             \
+  Lock lock;                                                  \
+  image->readMetadata();                                      \
 }
 
 static void _exif_import_tags(dt_image_t *img, Exiv2::XmpData::iterator &pos);
@@ -82,85 +100,6 @@ const char *dt_xmp_keys[]
         "Xmp.xmpMM.DerivedFrom" };
 
 static const guint dt_xmp_keys_n = G_N_ELEMENTS(dt_xmp_keys); // the number of XmpBag XmpSeq keys that dt uses
-
-
-/* a few helper functions inspired by
-   https://projects.kde.org/projects/kde/kdegraphics/libs/libkexiv2/repository/revisions/master/entry/libkexiv2/kexiv2gps.cpp
-   */
-
-static double _gps_string_to_number(const gchar *input)
-{
-  double res = 0;
-  gchar *s = g_strdup(input);
-  gchar dir = toupper(s[strlen(s) - 1]);
-  gchar **list = g_strsplit(s, ",", 0);
-  if(list)
-  {
-    if(list[2] == NULL) // format DDD,MM.mm{N|S}
-      res = g_ascii_strtoll(list[0], NULL, 10) + (g_ascii_strtod(list[1], NULL) / 60.0);
-    else if(list[3] == NULL) // format DDD,MM,SS{N|S}
-      res = g_ascii_strtoll(list[0], NULL, 10) + (g_ascii_strtoll(list[1], NULL, 10) / 60.0)
-            + (g_ascii_strtoll(list[2], NULL, 10) / 3600.0);
-    if(dir == 'S' || dir == 'W') res *= -1.0;
-  }
-  g_strfreev(list);
-  g_free(s);
-  return res;
-}
-
-static gboolean _gps_rationale_to_number(const double r0_1, const double r0_2, const double r1_1,
-                                         const double r1_2, const double r2_1, const double r2_2, char sign,
-                                         double *result)
-{
-  if(!result) return FALSE;
-  double res = 0.0;
-  // Latitude decoding from Exif.
-  double num, den, min, sec;
-  num = r0_1;
-  den = r0_2;
-  if(den == 0) return FALSE;
-  res = num / den;
-
-  num = r1_1;
-  den = r1_2;
-  if(den == 0) return FALSE;
-  min = num / den;
-  if(min != -1.0) res += min / 60.0;
-
-  num = r2_1;
-  den = r2_2;
-  if(den == 0)
-  {
-    // be relaxed and accept 0/0 seconds. See #246077.
-    if(num == 0)
-      den = 1;
-    else
-      return FALSE;
-  }
-  sec = num / den;
-  if(sec != -1.0) res += sec / 3600.0;
-
-  if(sign == 'S' || sign == 'W') res *= -1.0;
-
-  *result = res;
-  return TRUE;
-}
-
-static gboolean _gps_elevation_to_number(const double r_1, const double r_2, char sign, double *result)
-{
-  if(!result) return FALSE;
-  double res = 0.0;
-  // Altitude decoding from Exif.
-  const double num = r_1;
-  const double den = r_2;
-  if(den == 0) return FALSE;
-  res = num / den;
-
-  if(sign != '0') res *= -1.0;
-
-  *result = res;
-  return TRUE;
-}
 
 // inspired by ufraw_exiv2.cc:
 
@@ -212,6 +151,26 @@ static void dt_remove_exif_keys(Exiv2::ExifData &exif, const char *keys[], unsig
       Exiv2::ExifData::iterator pos;
       while((pos = exif.findKey(Exiv2::ExifKey(keys[i]))) != exif.end())
         exif.erase(pos);
+    }
+    catch(Exiv2::AnyError &e)
+    {
+      // the only exception we may get is "invalid" tag, which is not
+      // important enough to either stop the function, or even display
+      // a message (it's probably the tag is not implemented in the
+      // exiv2 version used)
+    }
+  }
+}
+
+static void dt_remove_xmp_keys(Exiv2::XmpData &xmp, const char *keys[], unsigned int n_keys)
+{
+  for(unsigned int i = 0; i < n_keys; i++)
+  {
+    try
+    {
+      Exiv2::XmpData::iterator pos;
+      while((pos = xmp.findKey(Exiv2::XmpKey(keys[i]))) != xmp.end())
+        xmp.erase(pos);
     }
     catch(Exiv2::AnyError &e)
     {
@@ -365,12 +324,12 @@ static bool dt_exif_read_xmp_data(dt_image_t *img, Exiv2::XmpData &xmpData, int 
     /* read gps location */
     if(FIND_XMP_TAG("Xmp.exif.GPSLatitude"))
     {
-      img->latitude = _gps_string_to_number(pos->toString().c_str());
+      img->latitude = dt_util_gps_string_to_number(pos->toString().c_str());
     }
 
     if(FIND_XMP_TAG("Xmp.exif.GPSLongitude"))
     {
-      img->longitude = _gps_string_to_number(pos->toString().c_str());
+      img->longitude = dt_util_gps_string_to_number(pos->toString().c_str());
     }
 
     if(FIND_XMP_TAG("Xmp.exif.GPSAltitude"))
@@ -381,7 +340,7 @@ static bool dt_exif_read_xmp_data(dt_image_t *img, Exiv2::XmpData &xmpData, int 
         std::string sign_str = ref->toString();
         const char *sign = sign_str.c_str();
         double elevation = 0.0;
-        if(_gps_elevation_to_number(pos->toRational(0).first, pos->toRational(0).second, sign[0], &elevation))
+        if(dt_util_gps_elevation_to_number(pos->toRational(0).first, pos->toRational(0).second, sign[0], &elevation))
           img->elevation = elevation;
       }
     }
@@ -400,6 +359,32 @@ static bool dt_exif_read_xmp_data(dt_image_t *img, Exiv2::XmpData &xmpData, int 
       // no need to do any Unicode<->locale conversion, the field is specified as ASCII
       g_strlcpy(img->exif_lens, lens, sizeof(img->exif_lens));
       free(adr);
+    }
+
+    /* read timestamp from Xmp.exif.DateTimeOriginal */
+    if(FIND_XMP_TAG("Xmp.exif.DateTimeOriginal"))
+    {
+      char *datetime = strdup(pos->toString().c_str());
+
+      /*
+       * exiftool (but apparently not evix2) convert
+       * e.g. "2017:10:23 12:34:56" to "2017-10-23T12:34:54" (ISO)
+       * revert this to the format expected by exif and darktable
+       */
+
+      // replace 'T' by ' ' (space)
+      char *c ;
+      while ( ( c = strchr(datetime,'T') ) != NULL )
+      {
+	*c = ' ';
+      }
+      // replace '-' by ':'
+      while ( ( c = strchr(datetime,'-')) != NULL ) {
+	*c = ':';
+      }
+
+      g_strlcpy(img->exif_datetime_taken, datetime, sizeof(img->exif_datetime_taken));
+      free(datetime);
     }
 
     return true;
@@ -697,9 +682,9 @@ static bool dt_exif_read_exif_data(dt_image_t *img, Exiv2::ExifData &exifData)
         std::string sign_str = ref->toString();
         const char *sign = sign_str.c_str();
         double latitude = 0.0;
-        if(_gps_rationale_to_number(pos->toRational(0).first, pos->toRational(0).second,
-                                    pos->toRational(1).first, pos->toRational(1).second,
-                                    pos->toRational(2).first, pos->toRational(2).second, sign[0], &latitude))
+        if(dt_util_gps_rationale_to_number(pos->toRational(0).first, pos->toRational(0).second,
+                                           pos->toRational(1).first, pos->toRational(1).second,
+                                           pos->toRational(2).first, pos->toRational(2).second, sign[0], &latitude))
           img->latitude = latitude;
       }
     }
@@ -712,9 +697,9 @@ static bool dt_exif_read_exif_data(dt_image_t *img, Exiv2::ExifData &exifData)
         std::string sign_str = ref->toString();
         const char *sign = sign_str.c_str();
         double longitude = 0.0;
-        if(_gps_rationale_to_number(pos->toRational(0).first, pos->toRational(0).second,
-                                    pos->toRational(1).first, pos->toRational(1).second,
-                                    pos->toRational(2).first, pos->toRational(2).second, sign[0], &longitude))
+        if(dt_util_gps_rationale_to_number(pos->toRational(0).first, pos->toRational(0).second,
+                                           pos->toRational(1).first, pos->toRational(1).second,
+                                           pos->toRational(2).first, pos->toRational(2).second, sign[0], &longitude))
           img->longitude = longitude;
       }
     }
@@ -727,7 +712,7 @@ static bool dt_exif_read_exif_data(dt_image_t *img, Exiv2::ExifData &exifData)
         std::string sign_str = ref->toString();
         const char *sign = sign_str.c_str();
         double elevation = 0.0;
-        if(_gps_elevation_to_number(pos->toRational(0).first, pos->toRational(0).second, sign[0], &elevation))
+        if(dt_util_gps_elevation_to_number(pos->toRational(0).first, pos->toRational(0).second, sign[0], &elevation))
           img->elevation = elevation;
       }
     }
@@ -990,7 +975,7 @@ int dt_exif_get_thumbnail(const char *path, uint8_t **buffer, size_t *size, char
   {
     std::unique_ptr<Exiv2::Image> image(Exiv2::ImageFactory::open(WIDEN(path)));
     assert(image.get() != 0);
-    image->readMetadata();
+    read_metadata_threadsafe(image);
 
     // Get a list of preview images available in the image. The list is sorted
     // by the preview image pixel size, starting with the smallest preview.
@@ -1051,7 +1036,7 @@ int dt_exif_read(dt_image_t *img, const char *path)
   {
     std::unique_ptr<Exiv2::Image> image(Exiv2::ImageFactory::open(WIDEN(path)));
     assert(image.get() != 0);
-    image->readMetadata();
+    read_metadata_threadsafe(image);
     bool res = true;
 
     // EXIF metadata
@@ -1094,7 +1079,7 @@ int dt_exif_write_blob(uint8_t *blob, uint32_t size, const char *path, const int
   {
     std::unique_ptr<Exiv2::Image> image(Exiv2::ImageFactory::open(WIDEN(path)));
     assert(image.get() != 0);
-    image->readMetadata();
+    read_metadata_threadsafe(image);
     Exiv2::ExifData &imgExifData = image->exifData();
     Exiv2::ExifData blobExifData;
     Exiv2::ExifParser::decode(blobExifData, blob + 6, size);
@@ -1154,7 +1139,7 @@ int dt_exif_read_blob(uint8_t **buf, const char *path, const int imgid, const in
   {
     std::unique_ptr<Exiv2::Image> image(Exiv2::ImageFactory::open(WIDEN(path)));
     assert(image.get() != 0);
-    image->readMetadata();
+    read_metadata_threadsafe(image);
     Exiv2::ExifData &exifData = image->exifData();
 
     // get rid of thumbnails
@@ -1299,14 +1284,14 @@ int dt_exif_read_blob(uint8_t **buf, const char *path, const int imgid, const in
 
     /* Replace RAW dimension with output dimensions (for example after crop/scale, or orientation for dng
      * mode) */
-    if(out_width > 0) exifData["Exif.Photo.PixelXDimension"] = out_width;
-    if(out_height > 0) exifData["Exif.Photo.PixelYDimension"] = out_height;
+    if(out_width > 0) exifData["Exif.Photo.PixelXDimension"] = (uint32_t)out_width;
+    if(out_height > 0) exifData["Exif.Photo.PixelYDimension"] = (uint32_t)out_height;
 
     int resolution = dt_conf_get_int("metadata/resolution");
     if(resolution > 0)
     {
-      exifData["Exif.Image.XResolution"] = resolution;
-      exifData["Exif.Image.YResolution"] = resolution;
+      exifData["Exif.Image.XResolution"] = Exiv2::Rational(resolution, 1);
+      exifData["Exif.Image.YResolution"] = Exiv2::Rational(resolution, 1);
       exifData["Exif.Image.ResolutionUnit"] = uint16_t(2); /* inches */
     }
     else
@@ -1698,8 +1683,23 @@ typedef struct history_entry_t
   gboolean have_operation, have_params, have_modversion;
 } history_entry_t;
 
-static void print_entry(history_entry_t *entry) __attribute__((unused));
-static void print_entry(history_entry_t *entry)
+// used for a hash table that maps mask_id to the mask data
+typedef struct mask_entry_t
+{
+  int mask_id;
+  int mask_type;
+  char *mask_name;
+  int mask_version;
+  unsigned char *mask;
+  int mask_len;
+  int mask_nb;
+  unsigned char *mask_src;
+  int mask_src_len;
+  gboolean already_added;
+} mask_entry_t;
+
+static void print_history_entry(history_entry_t *entry) __attribute__((unused));
+static void print_history_entry(history_entry_t *entry)
 {
   if(!entry || !entry->operation)
   {
@@ -1718,7 +1718,7 @@ static void print_entry(history_entry_t *entry)
   std::cout << std::endl;
 }
 
-static void free_entry(gpointer data)
+static void free_history_entry(gpointer data)
 {
   history_entry_t *entry = (history_entry_t *)data;
   g_free(entry->operation);
@@ -1884,7 +1884,7 @@ static GList *read_history_v2(Exiv2::XmpData &xmpData, const char *filename)
       if(errno)
       {
         std::cerr << "error reading history from '" << key << "' (" << filename << ")" << std::endl;
-        g_list_free_full(history_entries, free_entry);
+        g_list_free_full(history_entries, free_history_entry);
         g_free(key);
         return NULL;
       }
@@ -1893,7 +1893,7 @@ static GList *read_history_v2(Exiv2::XmpData &xmpData, const char *filename)
       if(*(key_iter++) != ']')
       {
         std::cerr << "error reading history from '" << key << "' (" << filename << ")" << std::endl;
-        g_list_free_full(history_entries, free_entry);
+        g_list_free_full(history_entries, free_history_entry);
         g_free(key);
         return NULL;
       }
@@ -1912,7 +1912,7 @@ static GList *read_history_v2(Exiv2::XmpData &xmpData, const char *filename)
       {
         // AFAICT this can't happen with regular exiv2 parsed XMP data, but better safe than sorry.
         // it can happen though when constructing things in a unusual order and then passing it to us without
-        // serializing it inbetween
+        // serializing it in between
         current_entry = (history_entry_t *)g_list_nth_data(history_entries, n - 1); // XMP starts counting at 1!
       }
 
@@ -1968,13 +1968,137 @@ skip:
     if(!(entry->have_operation && entry->have_params && entry->have_modversion))
     {
       std::cerr << "[exif] error: reading history from '" << filename << "' failed due to missing tags" << std::endl;
-      g_list_free_full(history_entries, free_entry);
+      g_list_free_full(history_entries, free_history_entry);
       history_entries = NULL;
       break;
     }
   }
 
   return history_entries;
+}
+
+void free_mask_entry(gpointer data)
+{
+  mask_entry_t *entry = (mask_entry_t *)data;
+  g_free(entry->mask_name);
+  free(entry->mask);
+  free(entry->mask_src);
+  free(entry);
+}
+
+static GHashTable *read_masks(Exiv2::XmpData &xmpData, const char *filename)
+{
+  GHashTable *mask_entries = g_hash_table_new_full(g_int_hash, g_int_equal, NULL, free_mask_entry);
+
+  // TODO: turn that into something like Xmp.darktable.history!
+  Exiv2::XmpData::iterator mask;
+  Exiv2::XmpData::iterator mask_name;
+  Exiv2::XmpData::iterator mask_type;
+  Exiv2::XmpData::iterator mask_version;
+  Exiv2::XmpData::iterator mask_id;
+  Exiv2::XmpData::iterator mask_nb;
+  Exiv2::XmpData::iterator mask_src;
+  if((mask = xmpData.findKey(Exiv2::XmpKey("Xmp.darktable.mask"))) != xmpData.end()
+    && (mask_src = xmpData.findKey(Exiv2::XmpKey("Xmp.darktable.mask_src"))) != xmpData.end()
+    && (mask_name = xmpData.findKey(Exiv2::XmpKey("Xmp.darktable.mask_name"))) != xmpData.end()
+    && (mask_type = xmpData.findKey(Exiv2::XmpKey("Xmp.darktable.mask_type"))) != xmpData.end()
+    && (mask_version = xmpData.findKey(Exiv2::XmpKey("Xmp.darktable.mask_version"))) != xmpData.end()
+    && (mask_id = xmpData.findKey(Exiv2::XmpKey("Xmp.darktable.mask_id"))) != xmpData.end()
+    && (mask_nb = xmpData.findKey(Exiv2::XmpKey("Xmp.darktable.mask_nb"))) != xmpData.end())
+  {
+    const int cnt = mask->count();
+    if(cnt == mask_src->count() && cnt == mask_name->count() && cnt == mask_type->count()
+      && cnt == mask_version->count() && cnt == mask_id->count() && cnt == mask_nb->count())
+    {
+      for(int i = 0; i < cnt; i++)
+      {
+        mask_entry_t *entry = (mask_entry_t *)calloc(1, sizeof(mask_entry_t));
+
+        entry->mask_id = mask_id->toLong(i);
+        entry->mask_type = mask_type->toLong(i);
+        std::string mask_name_str = mask_name->toString(i);
+        if(mask_name_str.c_str() != NULL)
+          entry->mask_name = g_strdup(mask_name_str.c_str());
+        else
+          entry->mask_name = g_strdup("form");
+
+        entry->mask_version = mask_version->toLong(i);
+
+        std::string mask_str = mask->toString(i);
+        const char *mask_c = mask_str.c_str();
+        const size_t mask_c_len = strlen(mask_c);
+        entry->mask = dt_exif_xmp_decode(mask_c, mask_c_len, &entry->mask_len);
+
+        entry->mask_nb = mask_nb->toLong(i);
+
+        std::string mask_src_str = mask_src->toString(i);
+        const char *mask_src_c = mask_src_str.c_str();
+        const size_t mask_src_c_len = strlen(mask_src_c);
+        entry->mask_src = dt_exif_xmp_decode(mask_src_c, mask_src_c_len, &entry->mask_src_len);
+
+        g_hash_table_insert(mask_entries, &entry->mask_id, (gpointer)entry);
+      }
+    }
+  }
+
+  return mask_entries;
+}
+
+static void add_mask_entry_to_db(int imgid, mask_entry_t *entry)
+{
+  // add the mask entry only once
+  if(entry->already_added)
+    return;
+  entry->already_added = TRUE;
+
+  sqlite3_stmt *stmt;
+  DT_DEBUG_SQLITE3_PREPARE_V2(
+    dt_database_get(darktable.db),
+                              "INSERT INTO main.mask (imgid, formid, form, name, version, points, points_count, source) "
+                              "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                              -1, &stmt, NULL);
+  DT_DEBUG_SQLITE3_BIND_INT(stmt, 1, imgid);
+  DT_DEBUG_SQLITE3_BIND_INT(stmt, 2, entry->mask_id);
+  DT_DEBUG_SQLITE3_BIND_INT(stmt, 3, entry->mask_type);
+  DT_DEBUG_SQLITE3_BIND_TEXT(stmt, 4, entry->mask_name, -1, SQLITE_TRANSIENT);
+  DT_DEBUG_SQLITE3_BIND_INT(stmt, 5, entry->mask_version);
+  DT_DEBUG_SQLITE3_BIND_BLOB(stmt, 6, entry->mask, entry->mask_len, SQLITE_TRANSIENT);
+  DT_DEBUG_SQLITE3_BIND_INT(stmt, 7, entry->mask_nb);
+  DT_DEBUG_SQLITE3_BIND_BLOB(stmt, 8, entry->mask_src, entry->mask_src_len, SQLITE_TRANSIENT);
+  sqlite3_step(stmt);
+  sqlite3_finalize(stmt);
+}
+
+static void add_non_clone_mask_entries_to_db(gpointer key, gpointer value, gpointer user_data)
+{
+  int imgid = *(int *)user_data;
+  mask_entry_t *entry = (mask_entry_t *)value;
+  if(!(entry->mask_type & (DT_MASKS_CLONE | DT_MASKS_NON_CLONE))) add_mask_entry_to_db(imgid, entry);
+}
+
+static void add_mask_entries_to_db(int imgid, GHashTable *mask_entries, int mask_id)
+{
+  if(mask_id <= 0) return;
+
+  // look for mask_id in the hash table
+  mask_entry_t *entry = (mask_entry_t *)g_hash_table_lookup(mask_entries, &mask_id);
+
+  if(!entry) return;
+
+  // if it's a group: recurse into the children first
+  if(entry->mask_type & DT_MASKS_GROUP)
+  {
+    dt_masks_point_group_t *group = (dt_masks_point_group_t *)entry->mask;
+    if((int)(entry->mask_nb * sizeof(dt_masks_point_group_t)) != entry->mask_len)
+    {
+      fprintf(stderr, "[masks] error loading masks from xmp file, bad binary blob size.\n");
+      return;
+    }
+    for(int i = 0; i < entry->mask_nb; i++)
+      add_mask_entries_to_db(imgid, mask_entries, group[i].formid);
+  }
+
+  add_mask_entry_to_db(imgid, entry);
 }
 
 // need a write lock on *img (non-const) to write stars (and soon color labels).
@@ -1988,7 +2112,7 @@ int dt_exif_xmp_read(dt_image_t *img, const char *filename, const int history_on
     // read xmp sidecar
     std::unique_ptr<Exiv2::Image> image(Exiv2::ImageFactory::open(WIDEN(filename)));
     assert(image.get() != 0);
-    image->readMetadata();
+    read_metadata_threadsafe(image);
     Exiv2::XmpData &xmpData = image->xmpData();
 
     sqlite3_stmt *stmt;
@@ -2037,77 +2161,23 @@ int dt_exif_xmp_read(dt_image_t *img, const char *filename, const int history_on
     // when we are reading the xmp data it doesn't make sense to flag the image as removed
     img->flags &= ~DT_IMAGE_REMOVE;
 
-    // forms
-    // TODO: turn that into something like Xmp.darktable.history!
-    Exiv2::XmpData::iterator mask;
-    Exiv2::XmpData::iterator mask_name;
-    Exiv2::XmpData::iterator mask_type;
-    Exiv2::XmpData::iterator mask_version;
-    Exiv2::XmpData::iterator mask_id;
-    Exiv2::XmpData::iterator mask_nb;
-    Exiv2::XmpData::iterator mask_src;
-    if((mask = xmpData.findKey(Exiv2::XmpKey("Xmp.darktable.mask"))) != xmpData.end()
-       && (mask_src = xmpData.findKey(Exiv2::XmpKey("Xmp.darktable.mask_src"))) != xmpData.end()
-       && (mask_name = xmpData.findKey(Exiv2::XmpKey("Xmp.darktable.mask_name"))) != xmpData.end()
-       && (mask_type = xmpData.findKey(Exiv2::XmpKey("Xmp.darktable.mask_type"))) != xmpData.end()
-       && (mask_version = xmpData.findKey(Exiv2::XmpKey("Xmp.darktable.mask_version"))) != xmpData.end()
-       && (mask_id = xmpData.findKey(Exiv2::XmpKey("Xmp.darktable.mask_id"))) != xmpData.end()
-       && (mask_nb = xmpData.findKey(Exiv2::XmpKey("Xmp.darktable.mask_nb"))) != xmpData.end())
-    {
-      const int cnt = mask->count();
-      if(cnt == mask_src->count() && cnt == mask_name->count() && cnt == mask_type->count()
-         && cnt == mask_version->count() && cnt == mask_id->count() && cnt == mask_nb->count())
-      {
-        // clean all registered form for this image
-        DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db), "DELETE FROM main.mask WHERE imgid = ?1", -1,
-                                    &stmt, NULL);
-        DT_DEBUG_SQLITE3_BIND_INT(stmt, 1, img->id);
-        sqlite3_step(stmt);
-        sqlite3_finalize(stmt);
 
-        // register all forms
-        for(int i = 0; i < cnt; i++)
-        {
-          DT_DEBUG_SQLITE3_PREPARE_V2(
-              dt_database_get(darktable.db),
-              "INSERT INTO main.mask (imgid, formid, form, name, version, points, points_count, source) "
-              "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-              -1, &stmt, NULL);
-          DT_DEBUG_SQLITE3_BIND_INT(stmt, 1, img->id);
-          DT_DEBUG_SQLITE3_BIND_INT(stmt, 2, mask_id->toLong(i));
-          DT_DEBUG_SQLITE3_BIND_INT(stmt, 3, mask_type->toLong(i));
-          std::string mask_name_str = mask_name->toString(i);
-          if(mask_name_str.c_str() != NULL)
-          {
-            const char *mname = mask_name_str.c_str();
-            DT_DEBUG_SQLITE3_BIND_TEXT(stmt, 4, mname, -1, SQLITE_TRANSIENT);
-          }
-          else
-          {
-            const char *mname = "form";
-            DT_DEBUG_SQLITE3_BIND_TEXT(stmt, 4, mname, -1, SQLITE_TRANSIENT);
-          }
-          DT_DEBUG_SQLITE3_BIND_INT(stmt, 5, mask_version->toLong(i));
-          std::string mask_str = mask->toString(i);
-          const char *mask_c = mask_str.c_str();
-          const size_t mask_c_len = strlen(mask_c);
-          int mask_len = 0;
-          const unsigned char *mask_blob = dt_exif_xmp_decode(mask_c, mask_c_len, &mask_len);
-          DT_DEBUG_SQLITE3_BIND_BLOB(stmt, 6, mask_blob, mask_len, SQLITE_TRANSIENT);
-          DT_DEBUG_SQLITE3_BIND_INT(stmt, 7, mask_nb->toLong(i));
+    // masks
+    // clean all old masks for this image
+    DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db), "DELETE FROM main.mask WHERE imgid = ?1", -1,
+                                &stmt, NULL);
+    DT_DEBUG_SQLITE3_BIND_INT(stmt, 1, img->id);
+    sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
 
-          std::string mask_src_str = mask_src->toString(i);
-          const char *mask_src_c = mask_src_str.c_str();
-          const size_t mask_src_c_len = strlen(mask_src_c);
-          int mask_src_len = 0;
-          unsigned char *mask_src_blob = dt_exif_xmp_decode(mask_src_c, mask_src_c_len, &mask_src_len);
-          DT_DEBUG_SQLITE3_BIND_BLOB(stmt, 8, mask_src_blob, mask_src_len, SQLITE_TRANSIENT);
+    // read the masks from the file first so we can add them to the db while reading history entries
+    GHashTable *mask_entries = read_masks(xmpData, filename);
 
-          sqlite3_step(stmt);
-          sqlite3_finalize(stmt);
-        }
-      }
-    }
+    // now add all masks that are not used for cloning. keeping them might be useful.
+    // TODO: make this configurable? or remove it altogether?
+    sqlite3_exec(dt_database_get(darktable.db), "BEGIN TRANSACTION", NULL, NULL, NULL);
+    g_hash_table_foreach(mask_entries, add_non_clone_mask_entries_to_db, &img->id);
+    sqlite3_exec(dt_database_get(darktable.db), "COMMIT", NULL, NULL, NULL);
 
     // history
     int num = 0;
@@ -2126,6 +2196,7 @@ int dt_exif_xmp_read(dt_image_t *img, const char *filename, const int history_on
     else
     {
       std::cerr << "error: Xmp schema version " << version << " in " << filename << " not supported" << std::endl;
+      g_hash_table_destroy(mask_entries);
       return 1;
     }
 
@@ -2152,7 +2223,7 @@ int dt_exif_xmp_read(dt_image_t *img, const char *filename, const int history_on
     for(GList *iter = history_entries; iter; iter = g_list_next(iter))
     {
       history_entry_t *entry = (history_entry_t *)iter->data;
-//       print_entry(entry);
+//       print_history_entry(entry);
 
       DT_DEBUG_SQLITE3_BIND_INT(stmt, 1, img->id);
       DT_DEBUG_SQLITE3_BIND_INT(stmt, 2, num);
@@ -2163,6 +2234,10 @@ int dt_exif_xmp_read(dt_image_t *img, const char *filename, const int history_on
       if(entry->blendop_params)
       {
         DT_DEBUG_SQLITE3_BIND_BLOB(stmt, 7, entry->blendop_params, entry->blendop_params_len, SQLITE_TRANSIENT);
+
+        // check what mask entries belong to this iop and add them to the db
+        const dt_develop_blend_params_t *blendop_params = (dt_develop_blend_params_t *)entry->blendop_params;
+        add_mask_entries_to_db(img->id, mask_entries, blendop_params->mask_id);
       }
       else
       {
@@ -2229,7 +2304,8 @@ int dt_exif_xmp_read(dt_image_t *img, const char *filename, const int history_on
 end:
     sqlite3_finalize(stmt);
 
-    g_list_free_full(history_entries, free_entry);
+    g_list_free_full(history_entries, free_history_entry);
+    g_hash_table_destroy(mask_entries);
 
     if(all_ok)
     {
@@ -2615,7 +2691,7 @@ int dt_exif_xmp_attach(const int imgid, const char *filename)
     // unfortunately it seems we have to read the metadata, to not erase the exif (which we just wrote).
     // will make export slightly slower, oh well.
     // img->clearXmpPacket();
-    img->readMetadata();
+    read_metadata_threadsafe(img);
 
     try
     {
@@ -2623,7 +2699,7 @@ int dt_exif_xmp_attach(const int imgid, const char *filename)
       std::unique_ptr<Exiv2::Image> input_image(Exiv2::ImageFactory::open(WIDEN(input_filename)));
       if(input_image.get() != 0)
       {
-        input_image->readMetadata();
+        read_metadata_threadsafe(input_image);
         img->setIptcData(input_image->iptcData());
         img->setXmpData(input_image->xmpData());
       }
@@ -2652,6 +2728,17 @@ int dt_exif_xmp_attach(const int imgid, const char *filename)
     }
 
     dt_remove_known_keys(xmpData); // is this needed?
+
+    {
+      // We also want to make sure to not have some tags that might
+      // have come in from XMP files created by digikam or similar
+      static const char *keys[] = {
+        "Xmp.tiff.Orientation"
+      };
+      static const guint n_keys = G_N_ELEMENTS(keys);
+      dt_remove_xmp_keys(xmpData, keys, n_keys);
+    }
+
     // last but not least attach what we have in DB to the XMP. in theory that should be
     // the same as what we just copied over from the sidecar file, but you never know ...
     dt_exif_xmp_read_data(xmpData, imgid);
@@ -2808,7 +2895,7 @@ gboolean dt_exif_get_datetime_taken(const uint8_t *data, size_t size, time_t *da
   {
     Exiv2::ExifData::const_iterator pos;
     std::unique_ptr<Exiv2::Image> image(Exiv2::ImageFactory::open(data, size));
-    image->readMetadata();
+    read_metadata_threadsafe(image);
     Exiv2::ExifData &exifData = image->exifData();
 
     char exif_datetime_taken[20];
@@ -2858,7 +2945,7 @@ void dt_exif_init()
   Exiv2::LogMsg::setHandler(&dt_exif_log_handler);
 
   Exiv2::XmpParser::initialize();
-  // this has te stay with the old url (namespace already propagated outside dt)
+  // this has to stay with the old url (namespace already propagated outside dt)
   Exiv2::XmpProperties::registerNs("http://darktable.sf.net/", "darktable");
   Exiv2::XmpProperties::registerNs("http://ns.adobe.com/lightroom/1.0/", "lr");
   Exiv2::XmpProperties::registerNs("http://cipa.jp/exif/1.0/", "exifEX");

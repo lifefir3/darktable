@@ -112,6 +112,9 @@ typedef struct dt_opencl_device_t
 
 struct dt_bilateral_cl_global_t;
 struct dt_local_laplacian_cl_global_t;
+struct dt_dwt_cl_global_t; // wavelet decompose
+struct dt_heal_cl_global_t; // healing
+
 /**
  * main struct, stored in darktable.opencl.
  * holds pointers to all
@@ -156,6 +159,12 @@ typedef struct dt_opencl_t
 
   // global kernels for local laplacian filter.
   struct dt_local_laplacian_cl_global_t *local_laplacian;
+
+  // global kernels for dwt filter.
+  struct dt_dwt_cl_global_t *dwt;
+  
+  // global kernels for heal filter.
+  struct dt_heal_cl_global_t *heal;
 } dt_opencl_t;
 
 /** description of memory requirements of local buffer
@@ -221,7 +230,7 @@ int dt_opencl_get_max_work_item_sizes(const int dev, size_t *sizes);
 int dt_opencl_get_work_group_limits(const int dev, size_t *sizes, size_t *workgroupsize,
                                     unsigned long *localmemsize);
 
-/** return max workgroup size for a specifc kernel */
+/** return max workgroup size for a specific kernel */
 int dt_opencl_get_kernel_work_group_size(const int dev, const int kernel, size_t *kernelworkgroupsize);
 
 /** attach arg. */

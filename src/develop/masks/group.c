@@ -59,7 +59,7 @@ static int dt_group_events_button_pressed(struct dt_iop_module_t *module, float 
     // we set the selected form in edit mode
     gui->group_edited = gui->group_selected;
     // we initialise some variable
-    gui->posx = gui->posy = gui->dx = gui->dy = 0.0f;
+    gui->dx = gui->dy = 0.0f;
     gui->form_selected = gui->border_selected = gui->form_dragging = gui->form_rotating = FALSE;
     gui->pivot_selected = FALSE;
     gui->point_border_selected = gui->seg_selected = gui->point_selected = gui->feather_selected = -1;
@@ -126,7 +126,7 @@ static int dt_group_events_mouse_moved(struct dt_iop_module_t *module, float pzx
 {
   dt_dev_zoom_t zoom = dt_control_get_dev_zoom();
   int closeup = dt_control_get_dev_closeup();
-  float zoom_scale = dt_dev_get_zoom_scale(darktable.develop, zoom, closeup ? 2 : 1, 1);
+  float zoom_scale = dt_dev_get_zoom_scale(darktable.develop, zoom, 1<<closeup, 1);
   float as = 0.005f / zoom_scale * darktable.develop->preview_pipe->backbuf_width;
 
   // we first don't do anything if we are inside a scrolling session

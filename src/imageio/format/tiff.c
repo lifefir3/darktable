@@ -31,7 +31,7 @@
 #include <stdlib.h>
 #include <tiffio.h>
 
-DT_MODULE(2)
+DT_MODULE(3)
 
 typedef struct dt_imageio_tiff_t
 {
@@ -41,6 +41,7 @@ typedef struct dt_imageio_tiff_t
   gboolean style_append;
   int bpp;
   int compress;
+  int compresslevel;
   TIFF *handle;
 } dt_imageio_tiff_t;
 
@@ -48,11 +49,13 @@ typedef struct dt_imageio_tiff_gui_t
 {
   GtkWidget *bpp;
   GtkWidget *compress;
+  GtkWidget *compresslevel;
 } dt_imageio_tiff_gui_t;
 
 
-int write_image(dt_imageio_module_data_t *d_tmp, const char *filename, const void *in_void, void *exif,
-                int exif_len, int imgid, int num, int total)
+int write_image(dt_imageio_module_data_t *d_tmp, const char *filename, const void *in_void,
+                dt_colorspaces_color_profile_type_t over_type, const char *over_filename,
+                void *exif, int exif_len, int imgid, int num, int total)
 {
   const dt_imageio_tiff_t *d = (dt_imageio_tiff_t *)d_tmp;
 
@@ -67,7 +70,7 @@ int write_image(dt_imageio_module_data_t *d_tmp, const char *filename, const voi
 
   if(imgid > 0)
   {
-    cmsHPROFILE out_profile = dt_colorspaces_get_output_profile(imgid)->profile;
+    cmsHPROFILE out_profile = dt_colorspaces_get_output_profile(imgid, over_type, over_filename)->profile;
     cmsSaveProfileToMem(out_profile, 0, &profile_len);
     if(profile_len > 0)
     {
@@ -82,7 +85,13 @@ int write_image(dt_imageio_module_data_t *d_tmp, const char *filename, const voi
   }
 
   // Create little endian tiff image
+#ifdef _WIN32
+  wchar_t *wfilename = g_utf8_to_utf16(filename, -1, NULL, NULL, NULL);
+  tif = TIFFOpenW(wfilename, "wl");
+  g_free(wfilename);
+#else
   tif = TIFFOpen(filename, "wl");
+#endif
   if(!tif)
   {
     rc = 1;
@@ -92,30 +101,30 @@ int write_image(dt_imageio_module_data_t *d_tmp, const char *filename, const voi
   // http://partners.adobe.com/public/developer/en/tiff/TIFFphotoshop.pdf (dated 2002)
   // "A proprietary ZIP/Flate compression code (0x80b2) has been used by some"
   // "software vendors. This code should be considered obsolete. We recommend"
-  // "that TIFF implentations recognize and read the obsolete code but only"
+  // "that TIFF implementations recognize and read the obsolete code but only"
   // "write the official compression code (0x0008)."
   // http://www.awaresystems.be/imaging/tiff/tifftags/compression.html
   // http://www.awaresystems.be/imaging/tiff/tifftags/predictor.html
   if(d->compress == 1)
   {
     TIFFSetField(tif, TIFFTAG_COMPRESSION, (uint16_t)COMPRESSION_ADOBE_DEFLATE);
-    TIFFSetField(tif, TIFFTAG_PREDICTOR, (uint16_t)1);
-    TIFFSetField(tif, TIFFTAG_ZIPQUALITY, (uint16_t)9);
+    TIFFSetField(tif, TIFFTAG_PREDICTOR, (uint16_t)PREDICTOR_NONE);
+    TIFFSetField(tif, TIFFTAG_ZIPQUALITY, (uint16_t)d->compresslevel);
   }
   else if(d->compress == 2)
   {
     TIFFSetField(tif, TIFFTAG_COMPRESSION, (uint16_t)COMPRESSION_ADOBE_DEFLATE);
-    TIFFSetField(tif, TIFFTAG_PREDICTOR, (uint16_t)2);
-    TIFFSetField(tif, TIFFTAG_ZIPQUALITY, (uint16_t)9);
+    TIFFSetField(tif, TIFFTAG_PREDICTOR, (uint16_t)PREDICTOR_HORIZONTAL);
+    TIFFSetField(tif, TIFFTAG_ZIPQUALITY, (uint16_t)d->compresslevel);
   }
   else if(d->compress == 3)
   {
     TIFFSetField(tif, TIFFTAG_COMPRESSION, (uint16_t)COMPRESSION_ADOBE_DEFLATE);
     if(d->bpp == 32)
-      TIFFSetField(tif, TIFFTAG_PREDICTOR, (uint16_t)3);
+      TIFFSetField(tif, TIFFTAG_PREDICTOR, (uint16_t)PREDICTOR_FLOATINGPOINT);
     else
-      TIFFSetField(tif, TIFFTAG_PREDICTOR, (uint16_t)2);
-    TIFFSetField(tif, TIFFTAG_ZIPQUALITY, (uint16_t)9);
+      TIFFSetField(tif, TIFFTAG_PREDICTOR, (uint16_t)PREDICTOR_HORIZONTAL);
+    TIFFSetField(tif, TIFFTAG_ZIPQUALITY, (uint16_t)d->compresslevel);
   }
   else // (d->compress == 0)
   {
@@ -262,7 +271,7 @@ void *legacy_params(dt_imageio_module_format_t *self, const void *const old_para
                     const size_t old_params_size, const int old_version, const int new_version,
                     size_t *new_size)
 {
-  if(old_version == 1 && new_version == 2)
+  if(old_version == 1 && new_version == 3)
   {
     typedef struct dt_imageio_tiff_v1_t
     {
@@ -275,7 +284,7 @@ void *legacy_params(dt_imageio_module_format_t *self, const void *const old_para
     } dt_imageio_tiff_v1_t;
 
     const dt_imageio_tiff_v1_t *o = (dt_imageio_tiff_v1_t *)old_params;
-    dt_imageio_tiff_t *n = (dt_imageio_tiff_t *)malloc(sizeof(dt_imageio_tiff_t));
+    dt_imageio_tiff_t *n = (dt_imageio_tiff_t *)calloc(1, sizeof(dt_imageio_tiff_t));
 
     n->max_width = o->max_width;
     n->max_height = o->max_height;
@@ -285,6 +294,36 @@ void *legacy_params(dt_imageio_module_format_t *self, const void *const old_para
     n->style_append = 0;
     n->bpp = o->bpp;
     n->compress = o->compress;
+    n->compresslevel = 9;
+    n->handle = o->handle;
+    *new_size = self->params_size(self);
+    return n;
+  }
+  else if(old_version == 2 && new_version == 3)
+  {
+    typedef struct dt_imageio_tiff_v2_t
+    {
+      int max_width, max_height;
+      int width, height;
+      char style[128];
+      gboolean style_append;
+      int bpp;
+      int compress;
+      TIFF *handle;
+    } dt_imageio_tiff_v2_t;
+
+    const dt_imageio_tiff_v2_t *o = (dt_imageio_tiff_v2_t *)old_params;
+    dt_imageio_tiff_t *n = (dt_imageio_tiff_t *)calloc(1, sizeof(dt_imageio_tiff_t));
+
+    n->max_width = o->max_width;
+    n->max_height = o->max_height;
+    n->width = o->width;
+    n->height = o->height;
+    g_strlcpy(n->style, o->style, sizeof(o->style));
+    n->style_append = o->style_append;
+    n->bpp = o->bpp;
+    n->compress = o->compress;
+    n->compresslevel = 9;
     n->handle = o->handle;
     *new_size = self->params_size(self);
     return n;
@@ -303,6 +342,16 @@ void *get_params(dt_imageio_module_format_t *self)
   else
     d->bpp = 8;
   d->compress = dt_conf_get_int("plugins/imageio/format/tiff/compress");
+
+  // TIFF compression level might actually be zero, handle this
+  if(!dt_conf_key_exists("plugins/imageio/format/tiff/compresslevel"))
+    d->compresslevel = 5;
+  else
+  {
+    d->compresslevel = dt_conf_get_int("plugins/imageio/format/tiff/compresslevel");
+    if(d->compresslevel < 0 || d->compresslevel > 9) d->compresslevel = 5;
+  }
+
   return d;
 }
 
@@ -325,6 +374,8 @@ int set_params(dt_imageio_module_format_t *self, const void *params, const int s
     dt_bauhaus_combobox_set(g->bpp, 0);
 
   dt_bauhaus_combobox_set(g->compress, d->compress);
+
+  dt_bauhaus_slider_set(g->compresslevel, d->compresslevel);
 
   return 0;
 }
@@ -381,6 +432,12 @@ static void compress_combobox_changed(GtkWidget *widget, gpointer user_data)
   dt_conf_set_int("plugins/imageio/format/tiff/compress", compress);
 }
 
+static void compress_level_changed(GtkWidget *slider, gpointer user_data)
+{
+  const int compresslevel = (int)dt_bauhaus_slider_get(slider);
+  dt_conf_set_int("plugins/imageio/format/tiff/compresslevel", compresslevel);
+}
+
 void init(dt_imageio_module_format_t *self)
 {
 #ifdef USE_LUA
@@ -391,7 +448,6 @@ void cleanup(dt_imageio_module_format_t *self)
 {
 }
 
-// TODO: some quality/compression stuff?
 void gui_init(dt_imageio_module_format_t *self)
 {
   dt_imageio_tiff_gui_t *gui = (dt_imageio_tiff_gui_t *)malloc(sizeof(dt_imageio_tiff_gui_t));
@@ -401,8 +457,14 @@ void gui_init(dt_imageio_module_format_t *self)
 
   const int compress = dt_conf_get_int("plugins/imageio/format/tiff/compress");
 
+  // TIFF compression level might actually be zero!
+  int compresslevel = 5;
+  if(dt_conf_key_exists("plugins/imageio/format/tiff/compresslevel"))
+    compresslevel = dt_conf_get_int("plugins/imageio/format/tiff/compresslevel");
+
   self->widget = gtk_box_new(GTK_ORIENTATION_VERTICAL, DT_PIXEL_APPLY_DPI(5));
 
+  // Bit depth combo box
   gui->bpp = dt_bauhaus_combobox_new(NULL);
   dt_bauhaus_widget_set_label(gui->bpp, NULL, _("bit depth"));
   dt_bauhaus_combobox_add(gui->bpp, _("8 bit"));
@@ -417,6 +479,7 @@ void gui_init(dt_imageio_module_format_t *self)
   gtk_box_pack_start(GTK_BOX(self->widget), gui->bpp, TRUE, TRUE, 0);
   g_signal_connect(G_OBJECT(gui->bpp), "value-changed", G_CALLBACK(bpp_combobox_changed), NULL);
 
+  // Compression method combo box
   gui->compress = dt_bauhaus_combobox_new(NULL);
   dt_bauhaus_widget_set_label(gui->compress, NULL, _("compression"));
   dt_bauhaus_combobox_add(gui->compress, _("uncompressed"));
@@ -426,6 +489,13 @@ void gui_init(dt_imageio_module_format_t *self)
   dt_bauhaus_combobox_set(gui->compress, compress);
   gtk_box_pack_start(GTK_BOX(self->widget), gui->compress, TRUE, TRUE, 0);
   g_signal_connect(G_OBJECT(gui->compress), "value-changed", G_CALLBACK(compress_combobox_changed), NULL);
+
+  // Compression level slider
+  gui->compresslevel = dt_bauhaus_slider_new_with_range(NULL, 0, 9, 1, 5, 0);
+  dt_bauhaus_widget_set_label(gui->compresslevel, NULL, _("compression level"));
+  dt_bauhaus_slider_set(gui->compresslevel, compresslevel);
+  gtk_box_pack_start(GTK_BOX(self->widget), GTK_WIDGET(gui->compresslevel), TRUE, TRUE, 0);
+  g_signal_connect(G_OBJECT(gui->compresslevel), "value-changed", G_CALLBACK(compress_level_changed), NULL);
 }
 
 void gui_cleanup(dt_imageio_module_format_t *self)

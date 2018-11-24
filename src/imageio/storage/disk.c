@@ -164,7 +164,7 @@ void gui_init(dt_imageio_module_storage_t *self)
   gtk_widget_set_tooltip_text(widget, tooltip_text);
   g_signal_connect(G_OBJECT(widget), "changed", G_CALLBACK(entry_changed_callback), self);
 
-  widget = dtgtk_button_new(dtgtk_cairo_paint_directory, CPF_DO_NOT_USE_BORDER);
+  widget = dtgtk_button_new(dtgtk_cairo_paint_directory, CPF_DO_NOT_USE_BORDER, NULL);
   gtk_widget_set_size_request(widget, DT_PIXEL_APPLY_DPI(18), DT_PIXEL_APPLY_DPI(18));
   gtk_widget_set_tooltip_text(widget, _("select directory"));
   gtk_box_pack_start(GTK_BOX(hbox), widget, FALSE, FALSE, 0);
@@ -207,101 +207,79 @@ int store(dt_imageio_module_storage_t *self, dt_imageio_module_data_t *sdata, co
   dt_imageio_disk_t *d = (dt_imageio_disk_t *)sdata;
 
   char filename[PATH_MAX] = { 0 };
-  char dirname[PATH_MAX] = { 0 };
+  char input_dir[PATH_MAX] = { 0 };
+  char pattern[DT_MAX_PATH_FOR_PARAMS];
+  g_strlcpy(pattern, d->filename, sizeof(pattern));
   gboolean from_cache = FALSE;
-  dt_image_full_path(imgid, dirname, sizeof(dirname), &from_cache);
+  dt_image_full_path(imgid, input_dir, sizeof(input_dir), &from_cache);
   int fail = 0;
   // we're potentially called in parallel. have sequence number synchronized:
   dt_pthread_mutex_lock(&darktable.plugin_threadsafe);
   {
-    // caching this allows to add "$(FILE_NAME)" to the end of the original string without caring
-    // about a potentially added "_$(SEQUENCE)"
-    char *original_filename = g_strdup(d->filename);
-
 try_again:
     // avoid braindead export which is bound to overwrite at random:
-    if(total > 1 && !g_strrstr(d->filename, "$"))
+    if(total > 1 && !g_strrstr(pattern, "$"))
     {
-      snprintf(d->filename + strlen(d->filename), sizeof(d->filename) - strlen(d->filename), "_$(SEQUENCE)");
+      snprintf(pattern + strlen(pattern), sizeof(pattern) - strlen(pattern), "_$(SEQUENCE)");
     }
 
-    gchar *fixed_path = dt_util_fix_path(d->filename);
-    g_strlcpy(d->filename, fixed_path, sizeof(d->filename));
+    gchar *fixed_path = dt_util_fix_path(pattern);
+    g_strlcpy(pattern, fixed_path, sizeof(pattern));
     g_free(fixed_path);
 
-    d->vp->filename = dirname;
+    d->vp->filename = input_dir;
     d->vp->jobcode = "export";
     d->vp->imgid = imgid;
     d->vp->sequence = num;
 
-    gchar *result_filename = dt_variables_expand(d->vp, d->filename, TRUE);
+    gchar *result_filename = dt_variables_expand(d->vp, pattern, TRUE);
     g_strlcpy(filename, result_filename, sizeof(filename));
     g_free(result_filename);
 
     // if filenamepattern is a directory just add ${FILE_NAME} as default..
+    // this can happen if the filename component of the pattern is an empty variable
     char last_char = *(filename + strlen(filename) - 1);
-    if(g_file_test(filename, G_FILE_TEST_IS_DIR) && (last_char == '/' || last_char == '\\'))
+    if(last_char == '/' || last_char == '\\')
     {
-      snprintf(d->filename, sizeof(d->filename), "%s/$(FILE_NAME)", original_filename);
-      goto try_again;
+      // add to the end of the original pattern without caring about a
+      // potentially added "_$(SEQUENCE)"
+      if (snprintf(pattern, sizeof(pattern), "%s" G_DIR_SEPARATOR_S "$(FILE_NAME)", d->filename) < sizeof(pattern))
+        goto try_again;
     }
 
-    g_free(original_filename);
+    char *output_dir = g_path_get_dirname(filename);
 
-    g_strlcpy(dirname, filename, sizeof(dirname));
+    if(g_mkdir_with_parents(output_dir, 0755))
+    {
+      fprintf(stderr, "[imageio_storage_disk] could not create directory: `%s'!\n", output_dir);
+      dt_control_log(_("could not create directory `%s'!"), output_dir);
+      fail = 1;
+      goto failed;
+    }
+    if(g_access(output_dir, W_OK | X_OK) != 0)
+    {
+      fprintf(stderr, "[imageio_storage_disk] could not write to directory: `%s'!\n", output_dir);
+      dt_control_log(_("could not write to directory `%s'!"), output_dir);
+      fail = 1;
+      goto failed;
+    }
 
     const char *ext = format->extension(fdata);
-    char *c = dirname + strlen(dirname);
-    for(; c > dirname && *c != '/'; c--)
-      ;
-    if(*c == '/')
-    {
-      if(c > dirname) // /.../.../foo
-        c[0] = '\0';
-      else // /foo
-        c[1] = '\0';
-    }
-    else if(c == dirname) // foo
-    {
-      c[0] = '.';
-      c[1] = '\0';
-    }
-
-    if(g_mkdir_with_parents(dirname, 0755))
-    {
-      fprintf(stderr, "[imageio_storage_disk] could not create directory: `%s'!\n", dirname);
-      dt_control_log(_("could not create directory `%s'!"), dirname);
-      fail = 1;
-      goto failed;
-    }
-    if(g_access(dirname, W_OK | X_OK) != 0)
-    {
-      fprintf(stderr, "[imageio_storage_disk] could not write to directory: `%s'!\n", dirname);
-      dt_control_log(_("could not write to directory `%s'!"), dirname);
-      fail = 1;
-      goto failed;
-    }
-
-    c = filename + strlen(filename);
-    // remove everything after the last '.'. this destroys any file name with dots in it since $(FILE_NAME)
-    // already comes without the original extension.
-    //     for(; c>filename && *c != '.' && *c != '/' ; c--);
-    //     if(c <= filename || *c=='/') c = filename + strlen(filename);
-
-    sprintf(c, ".%s", ext);
+    char *c = filename + strlen(filename);
+    size_t filename_free_space = sizeof(filename) - (c - filename);
+    snprintf(c, filename_free_space, ".%s", ext);
 
   /* prevent overwrite of files */
   failed:
-    if(!d->overwrite)
+    g_free(output_dir);
+
+    if(!fail && !d->overwrite)
     {
       int seq = 1;
-      if(!fail && g_file_test(filename, G_FILE_TEST_EXISTS))
+      while(g_file_test(filename, G_FILE_TEST_EXISTS))
       {
-        do
-        {
-          sprintf(c, "_%.2d.%s", seq, ext);
-          seq++;
-        } while(g_file_test(filename, G_FILE_TEST_EXISTS));
+        snprintf(c, filename_free_space, "_%.2d.%s", seq, ext);
+        seq++;
       }
     }
   } // end of critical block
@@ -318,10 +296,8 @@ try_again:
   }
 
   printf("[export_job] exported to `%s'\n", filename);
-  char *trunc = filename + strlen(filename) - 32;
-  if(trunc < filename) trunc = filename;
-  dt_control_log(ngettext("%d/%d exported to `%s%s'", "%d/%d exported to `%s%s'", num),
-                 num, total, trunc != filename ? ".." : "", trunc);
+  dt_control_log(ngettext("%d/%d exported to `%s'", "%d/%d exported to `%s'", num),
+                 num, total, filename);
   return 0;
 }
 

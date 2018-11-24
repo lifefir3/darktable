@@ -70,9 +70,14 @@ static gboolean _togglebutton_draw(GtkWidget *widget, cairo_t *cr)
   /* update active state paint flag */
   gboolean active = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(widget));
   if(active)
+  {
     flags |= CPF_ACTIVE;
+  }
   else
+  {
     flags &= ~(CPF_ACTIVE);
+    fg_color.alpha = CLAMP(fg_color.alpha / 2.0, 0.3, 1.0);
+  }
 
   /* prelight */
   if(state & GTK_STATE_FLAG_PRELIGHT)
@@ -128,15 +133,16 @@ static gboolean _togglebutton_draw(GtkWidget *widget, cairo_t *cr)
 
     int icon_width = text ? height - (border * 2) : width - (border * 2);
     int icon_height = height - (border * 2);
+    void *icon_data = DTGTK_TOGGLEBUTTON(widget)->icon_data;
 
     if(icon_width > 0 && icon_height > 0)
     {
       if(text)
         DTGTK_TOGGLEBUTTON(widget)
-            ->icon(cr, border, border, height - (border * 2), height - (border * 2), flags);
+            ->icon(cr, border, border, height - (border * 2), height - (border * 2), flags, icon_data);
       else
         DTGTK_TOGGLEBUTTON(widget)
-            ->icon(cr, border, border, width - (border * 2), height - (border * 2), flags);
+            ->icon(cr, border, border, width - (border * 2), height - (border * 2), flags, icon_data);
     }
   }
 
@@ -158,12 +164,13 @@ static gboolean _togglebutton_draw(GtkWidget *widget, cairo_t *cr)
 }
 
 // Public functions
-GtkWidget *dtgtk_togglebutton_new(DTGTKCairoPaintIconFunc paint, gint paintflags)
+GtkWidget *dtgtk_togglebutton_new(DTGTKCairoPaintIconFunc paint, gint paintflags, void *paintdata)
 {
   GtkDarktableToggleButton *button;
   button = g_object_new(dtgtk_togglebutton_get_type(), NULL);
   button->icon = paint;
   button->icon_flags = paintflags;
+  button->icon_data = paintdata;
   gtk_widget_set_size_request(GTK_WIDGET(button), DT_PIXEL_APPLY_DPI(17), DT_PIXEL_APPLY_DPI(17));
   return (GtkWidget *)button;
 }
@@ -188,10 +195,11 @@ GType dtgtk_togglebutton_get_type()
 
 
 void dtgtk_togglebutton_set_paint(GtkDarktableToggleButton *button, DTGTKCairoPaintIconFunc paint,
-                                  gint paintflags)
+                                  gint paintflags, void *paintdata)
 {
   button->icon = paint;
   button->icon_flags = paintflags;
+  button->icon_data = paintdata;
 }
 
 void dtgtk_togglebutton_override_color(GtkDarktableToggleButton *button, GdkRGBA *color)

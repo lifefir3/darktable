@@ -9,7 +9,7 @@ add_custom_command(
   DEPENDS ${CMAKE_SOURCE_DIR}/AUTHORS ${CMAKE_SOURCE_DIR}/tools/authors_h.sh
   OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/tools/darktable_authors.h
   COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/tools/
-  COMMAND ${CMAKE_SOURCE_DIR}/tools/authors_h.sh ${CMAKE_SOURCE_DIR}/AUTHORS ${CMAKE_CURRENT_BINARY_DIR}/tools/darktable_authors.h
+  COMMAND ${CMAKE_COMMAND} -E env LANG=C LC_ALL=C sh ${CMAKE_SOURCE_DIR}/tools/authors_h.sh ${CMAKE_SOURCE_DIR}/AUTHORS ${CMAKE_CURRENT_BINARY_DIR}/tools/darktable_authors.h
   COMMENT "Generating authors.h for about dialog."
 )
 
@@ -20,7 +20,7 @@ add_custom_target(
 )
 
 # The modules
-set(MODULES import export copy_history styles tagging image select collect recentcollect metadata metadata_view navigation histogram history snapshots modulelist modulegroups backgroundjobs colorpicker masks session)
+set(MODULES import export copy_history styles tagging image select collect recentcollect metadata metadata_view navigation histogram history snapshots modulelist modulegroups backgroundjobs colorpicker masks session duplicate)
 
 # The tools
 set(MODULES ${MODULES} viewswitcher)
@@ -34,6 +34,10 @@ set(MODULES ${MODULES} module_toolbox)
 set(MODULES ${MODULES} filmstrip)
 set(MODULES ${MODULES} hinter)
 set(MODULES ${MODULES} global_toolbox)
+
+if(BUILD_BATTERY_INDICATOR)
+  set(MODULES ${MODULES} battery_indicator)
+endif()
 
 # modules
 add_library(import MODULE "import.c")
@@ -57,6 +61,7 @@ add_library(backgroundjobs MODULE "backgroundjobs.c")
 add_library(colorpicker MODULE "colorpicker.c")
 add_library(masks MODULE "masks.c")
 add_library(session MODULE "session.c")
+add_library(duplicate MODULE "duplicate.c")
 
 # tools
 add_library(viewswitcher MODULE "tools/viewswitcher.c")
@@ -73,6 +78,10 @@ add_library(module_toolbox MODULE "tools/module_toolbox.c")
 add_library(filmstrip MODULE "tools/filmstrip.c")
 add_library(hinter MODULE "tools/hinter.c")
 add_library(global_toolbox MODULE "tools/global_toolbox.c")
+
+if(BUILD_BATTERY_INDICATOR)
+  add_library(battery_indicator MODULE "tools/battery_indicator.c")
+endif()
 
 # check if gphoto2 found and add build of camera modules...
 if(GPHOTO2_FOUND)
@@ -109,6 +118,17 @@ endforeach(module)
 foreach(module ${MODULES})
     if (WIN32)
       _detach_debuginfo (${module} ${CMAKE_INSTALL_LIBDIR}/darktable/plugins/lighttable)
-    endif(WIN32)
+    else()
+        # Note that $ORIGIN is not a variable but has a special meaning at runtime.
+        # The string "$ORIGIN" should end up in the executable as-is.
+        set(RPATH_DT "$ORIGIN")
+        if (APPLE)
+            # The string "@loader_path" should end up in the executable as-is.
+            set(RPATH_DT "@loader_path")
+        endif()
+        set_target_properties(${module}
+                              PROPERTIES
+                              INSTALL_RPATH ${RPATH_DT}/../${CMAKE_INSTALL_LIBDIR}/darktable)
+        endif(WIN32)
     install(TARGETS  ${module} DESTINATION ${CMAKE_INSTALL_LIBDIR}/darktable/plugins/lighttable COMPONENT DTApplication)
 endforeach(module)

@@ -231,7 +231,7 @@ static int zoom_member(lua_State *L)
   else
   {
     // we rely on osm to correctly clamp zoom (checked in osm source
-    // lua can have temporarly false values but it will fix itself when entering map
+    // lua can have temporarily false values but it will fix itself when entering map
     // unfortunately we can't get the min max when lib->map doesn't exist
     luaL_checktype(L, 3, LUA_TNUMBER);
     int zoom = luaL_checkinteger(L, 3);
@@ -309,7 +309,7 @@ static GdkPixbuf *init_image_pin()
   cairo_surface_t *cst = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, w, h);
   cairo_t *cr = cairo_create(cst);
   cairo_set_source_rgba(cr, r, g, b, a);
-  dtgtk_cairo_paint_map_pin(cr, 0, 0, w, h, 0);
+  dtgtk_cairo_paint_map_pin(cr, 0, 0, w, h, 0, NULL);
   cairo_destroy(cr);
   uint8_t *data = cairo_image_surface_get_data(cst);
   dt_draw_cairo_to_gdk_pixbuf(data, w, h);
@@ -407,11 +407,15 @@ void init(dt_view_t *self)
     lib->map = g_object_new(OSM_TYPE_GPS_MAP, "map-source", OSM_GPS_MAP_SOURCE_NULL, "proxy-uri",
                             g_getenv("http_proxy"), NULL);
 
-    GtkWidget *parent = gtk_widget_get_parent(dt_ui_center(darktable.gui->ui));
+    GtkWidget *parent = gtk_widget_get_parent(gtk_widget_get_parent(dt_ui_center(darktable.gui->ui)));
     gtk_box_pack_start(GTK_BOX(parent), GTK_WIDGET(lib->map), TRUE, TRUE, 0);
 
     lib->osd = g_object_new(OSM_TYPE_GPS_MAP_OSD, "show-scale", TRUE, "show-coordinates", TRUE, "show-dpad",
-                            TRUE, "show-zoom", TRUE, NULL);
+                            TRUE, "show-zoom", TRUE,
+#ifdef HAVE_OSMGPSMAP_NEWER_THAN_110
+                            "show-copyright", TRUE,
+#endif
+                            NULL);
 
     if(dt_conf_get_bool("plugins/map/show_map_osd"))
     {
@@ -563,7 +567,7 @@ static void _view_map_changed_callback(OsmGpsMap *map, dt_view_t *self)
     lib->images = NULL;
   }
 
-  /* add  all images to the map */
+  /* add all images to the map */
   gboolean needs_redraw = FALSE;
   const int _thumb_size = DT_PIXEL_APPLY_DPI(thumb_size);
   dt_mipmap_size_t mip = dt_mipmap_cache_get_matching_size(darktable.mipmap_cache, _thumb_size, _thumb_size);
@@ -787,8 +791,8 @@ void enter(dt_view_t *self)
   _view_map_set_map_source_g_object(self, lib->map_source);
 
   /* replace center widget */
-  GtkWidget *parent = gtk_widget_get_parent(dt_ui_center(darktable.gui->ui));
-  gtk_widget_hide(dt_ui_center(darktable.gui->ui));
+  GtkWidget *parent = gtk_widget_get_parent(gtk_widget_get_parent(dt_ui_center(darktable.gui->ui)));
+  gtk_widget_hide(gtk_widget_get_parent(dt_ui_center(darktable.gui->ui)));
 
   gtk_box_reorder_child(GTK_BOX(parent), GTK_WIDGET(lib->map), 2);
 
@@ -835,7 +839,7 @@ void leave(dt_view_t *self)
   dt_map_t *lib = (dt_map_t *)self->data;
 
   gtk_widget_hide(GTK_WIDGET(lib->map));
-  gtk_widget_show_all(dt_ui_center(darktable.gui->ui));
+  gtk_widget_show_all(gtk_widget_get_parent(dt_ui_center(darktable.gui->ui)));
 
   /* reset proxy */
   darktable.view_manager->proxy.map.view = NULL;
@@ -973,6 +977,7 @@ static OsmGpsMapPolygon *_view_map_add_polygon(const dt_view_t *view, GList *poi
 
   g_object_set(poly, "track", track, (gchar *)0);
   g_object_set(poly, "editable", FALSE, (gchar *)0);
+  g_object_set(poly, "shaded", FALSE, (gchar *)0);
 
   osm_gps_map_polygon_add(lib->map, poly);
 

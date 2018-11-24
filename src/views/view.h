@@ -41,7 +41,7 @@
 #include "lua/view.h"
 #endif
 
-/** avilable views flags, a view should return it's type and
+/** available views flags, a view should return its type and
     is also used in modules flags available in src/libs to
     control which view the module should be available in also
     which placement in the panels the module have.
@@ -84,8 +84,8 @@ typedef struct dt_view_t
   // width and height of allocation
   uint32_t width, height;
   // scroll bar control
-  float vscroll_size, vscroll_viewport_size, vscroll_pos;
-  float hscroll_size, hscroll_viewport_size, hscroll_pos;
+  float vscroll_size, vscroll_lower, vscroll_viewport_size, vscroll_pos;
+  float hscroll_size, hscroll_lower, hscroll_viewport_size, hscroll_pos;
   const char *(*name)(struct dt_view_t *self);    // get translatable name
   uint32_t (*view)(const struct dt_view_t *self); // get the view type
   uint32_t (*flags)();                            // get the view flags
@@ -96,7 +96,7 @@ typedef struct dt_view_t
                  int32_t pointery);         // expose the module (gtk callback)
   int (*try_enter)(struct dt_view_t *self); // test if enter can succeed.
   void (*enter)(struct dt_view_t *self); // mode entered, this module got focus. return non-null on failure.
-  void (*leave)(struct dt_view_t *self); // mode left (is called after the new try_enter has succeded).
+  void (*leave)(struct dt_view_t *self); // mode left (is called after the new try_enter has succeeded).
   void (*reset)(struct dt_view_t *self); // reset default appearance
 
   // event callbacks:
@@ -111,6 +111,7 @@ typedef struct dt_view_t
   int (*key_released)(struct dt_view_t *self, guint key, guint state);
   void (*configure)(struct dt_view_t *self, int width, int height);
   void (*scrolled)(struct dt_view_t *self, double x, double y, int up, int state); // mouse scrolled in view
+  void (*scrollbar_changed)(struct dt_view_t *self, double x, double y); // scrollbar changed in view
 
   // keyboard accel callbacks
   void (*init_key_accels)(struct dt_view_t *self);
@@ -314,6 +315,7 @@ int dt_view_manager_key_pressed(dt_view_manager_t *vm, guint key, guint state);
 int dt_view_manager_key_released(dt_view_manager_t *vm, guint key, guint state);
 void dt_view_manager_configure(dt_view_manager_t *vm, int width, int height);
 void dt_view_manager_scrolled(dt_view_manager_t *vm, double x, double y, int up, int state);
+void dt_view_manager_scrollbar_changed(dt_view_manager_t *vm, double x, double y);
 
 /** add widget to the current view toolbox */
 void dt_view_manager_view_toolbox_add(dt_view_manager_t *vm, GtkWidget *tool, dt_view_type_flags_t view);
@@ -322,8 +324,8 @@ void dt_view_manager_view_toolbox_add(dt_view_manager_t *vm, GtkWidget *tool, dt
 void dt_view_manager_module_toolbox_add(dt_view_manager_t *vm, GtkWidget *tool, dt_view_type_flags_t view);
 
 /** set scrollbar positions, gui method. */
-void dt_view_set_scrollbar(dt_view_t *view, float hpos, float hsize, float hwinsize, float vpos, float vsize,
-                           float vwinsize);
+void dt_view_set_scrollbar(dt_view_t *view, float hpos, float vscroll_lower, float hsize, float hwinsize,
+                           float vpos, float hscroll_lower, float vsize, float vwinsize);
 
 /*
  * Tethering View PROXY

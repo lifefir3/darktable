@@ -60,6 +60,10 @@ gboolean dt_control_configure(GtkWidget *da, GdkEventConfigure *event, gpointer 
 void dt_control_log(const char *msg, ...) __attribute__((format(printf, 1, 2)));
 void dt_control_log_busy_enter();
 void dt_control_log_busy_leave();
+// disable the possibility to change the cursor shape with dt_control_change_cursor
+void dt_control_forbid_change_cursor();
+// enable the possibility to change the cursor shape with dt_control_change_cursor
+void dt_control_allow_change_cursor();
 void dt_control_change_cursor(dt_cursor_t cursor);
 void dt_control_write_sidecar_files();
 void dt_control_delete_images();
@@ -102,11 +106,10 @@ int dt_control_is_key_accelerators_on(struct dt_control_t *s);
 // All the accelerator keys for the key_pressed style shortcuts
 typedef struct dt_control_accels_t
 {
-  GtkAccelKey filmstrip_forward, filmstrip_back, lighttable_up, lighttable_down, lighttable_right,
-      lighttable_left, lighttable_center, lighttable_preview, lighttable_preview_display_focus,
-      lighttable_preview_sticky, lighttable_preview_sticky_focus, lighttable_preview_sticky_exit,
-      global_sideborders, global_header, darkroom_preview, slideshow_start;
-
+  GtkAccelKey filmstrip_forward, filmstrip_back, lighttable_up, lighttable_down, lighttable_right, lighttable_left,
+      lighttable_center, lighttable_preview, lighttable_preview_display_focus, lighttable_preview_sticky,
+      lighttable_preview_sticky_focus, lighttable_preview_sticky_exit, global_sideborders, global_header,
+      darkroom_preview, slideshow_start, global_zoom_in, global_zoom_out, darkroom_skip_mouse_events;
 } dt_control_accels_t;
 
 #define DT_CTL_LOG_SIZE 10
@@ -143,6 +146,7 @@ typedef struct dt_control_t
   double button_x, button_y;
   int history_start;
   int32_t mouse_over_id;
+  gboolean lock_cursor_shape;
 
   // TODO: move these to some darkroom struct
   // synchronized navigation

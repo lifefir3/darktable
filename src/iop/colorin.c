@@ -36,6 +36,7 @@
 #include "common/imageio_tiff.h"
 #include "develop/imageop_math.h"
 #include "iop/iop_api.h"
+#include "common/iop_group.h"
 
 #include "external/adobe_coeff.c"
 #if defined(__SSE__)
@@ -106,6 +107,7 @@ typedef struct dt_iop_colorin_data_t
   dt_colorspaces_color_profile_type_t type;
 } dt_iop_colorin_data_t;
 
+
 const char *name()
 {
   return _("input color profile");
@@ -113,7 +115,7 @@ const char *name()
 
 int groups()
 {
-  return IOP_GROUP_COLOR;
+  return dt_iop_get_group("input color profile", IOP_GROUP_COLOR);
 }
 
 int flags()
@@ -1262,19 +1264,6 @@ static void mat3mul(float *dst, const float *const m1, const float *const m2)
   }
 }
 
-
-static int is_leica_monochrom(dt_image_t *img)
-{
-  if(strncmp(img->exif_maker, "Leica Camera AG", 15) != 0) return 0;
-
-  gchar *tmp_model = g_ascii_strdown(img->exif_model, -1);
-
-  const int res = strstr(tmp_model, "monochrom") != NULL;
-  g_free(tmp_model);
-
-  return res;
-}
-
 void commit_params(struct dt_iop_module_t *self, dt_iop_params_t *p1, dt_dev_pixelpipe_t *pipe,
                    dt_dev_pixelpipe_iop_t *piece)
 {
@@ -1400,7 +1389,7 @@ void commit_params(struct dt_iop_module_t *self, dt_iop_params_t *p1, dt_dev_pix
 
     if(isnan(cam_xyz[0]))
     {
-      if(dt_image_is_raw(&pipe->image) && !is_leica_monochrom(&pipe->image))
+      if(dt_image_is_raw(&pipe->image) && !dt_image_is_monochrome(&pipe->image))
       {
         fprintf(stderr, "[colorin] `%s' color matrix not found!\n", pipe->image.camera_makermodel);
         dt_control_log(_("`%s' color matrix not found!"), pipe->image.camera_makermodel);
@@ -1710,7 +1699,7 @@ void init(dt_iop_module_t *module)
   module->default_params = calloc(1, sizeof(dt_iop_colorin_params_t));
   module->params_size = sizeof(dt_iop_colorin_params_t);
   module->gui_data = NULL;
-  module->priority = 352; // module order created by iop_dependencies.py, do not edit!
+  module->priority = 371; // module order created by iop_dependencies.py, do not edit!
   module->hide_enable_button = 1;
   module->default_enabled = 1;
 }
@@ -1851,6 +1840,7 @@ void gui_init(struct dt_iop_module_t *self)
   dt_loc_get_user_config_dir(confdir, sizeof(confdir));
 
   self->widget = gtk_box_new(GTK_ORIENTATION_VERTICAL, DT_BAUHAUS_SPACE);
+  dt_gui_add_help_link(self->widget, dt_get_help_url(self->op));
   g->profile_combobox = dt_bauhaus_combobox_new(self);
   dt_bauhaus_widget_set_label(g->profile_combobox, NULL, _("profile"));
   gtk_box_pack_start(GTK_BOX(self->widget), g->profile_combobox, TRUE, TRUE, 0);
@@ -1860,9 +1850,13 @@ void gui_init(struct dt_iop_module_t *self)
 
   dt_bauhaus_combobox_set(g->profile_combobox, 0);
 
-  char tooltip[1024];
-  snprintf(tooltip, sizeof(tooltip), _("ICC profiles in %s/color/in or %s/color/in"), confdir, datadir);
+  char *system_profile_dir = g_build_filename(datadir, "color", "in", NULL);
+  char *user_profile_dir = g_build_filename(confdir, "color", "in", NULL);
+  char *tooltip = g_strdup_printf(_("ICC profiles in %s or %s"), user_profile_dir, system_profile_dir);
   gtk_widget_set_tooltip_text(g->profile_combobox, tooltip);
+  g_free(system_profile_dir);
+  g_free(user_profile_dir);
+  g_free(tooltip);
 
   g_signal_connect(G_OBJECT(g->profile_combobox), "value-changed", G_CALLBACK(profile_changed), (gpointer)self);
 

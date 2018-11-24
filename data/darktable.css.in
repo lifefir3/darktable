@@ -15,7 +15,10 @@
 @define-color brush_cursor alpha(white, .9);
 @define-color brush_trace alpha(black, .8);
 
-@define-color dark_bg_color #350000;
+@define-color bauhaus_fg #ccc;
+@define-color bauhaus_border #191919;
+@define-color bauhaus_bg alpha(@bauhaus_border, 0.2);
+@define-color bauhaus_fg_insensitive alpha(@bauhaus_fg, 0.5);
 
 * {
   font: ${GTK_CSS_FONT};
@@ -90,6 +93,7 @@ combobox *:hover,
   border:0;
   margin:0;
   background-color: transparent;
+  color: @fg_color;
   outline-style:none;
 }
 /* buttons in plugins */
@@ -126,6 +130,12 @@ button:hover
 button:checked
 {
   background-color: shade(@selected_bg_color, 1.4);
+}
+
+#lib-plugin-ui checkbutton *,
+#iop-plugin-ui checkbutton *
+{
+  margin-right:4pt;
 }
 
 /* frame around plugin boxes */
@@ -647,4 +657,34 @@ progressbar progress
 cell:selected
 {
   background-color: shade(@selected_bg_color, 1.2);
+}
+
+#bauhaus-popup
+{
+  /* NORMAL */
+  background-color: @selected_bg_color;
+  color: @fg_color;
+}
+
+#bauhaus-popup:selected
+{
+  /* SELECTED */
+  color: shade(@fg_color, 1.5);
+}
+
+#bauhaus-popup:hover
+{
+  /* PRELIGHT */
+  color: shade(@fg_color, 0.7);
+}
+
+#bauhaus-popup:disabled
+{
+  /* insensitive */
+  color: black;
+}
+
+#show_mask_button
+{
+    color: #FFFF00;
 }

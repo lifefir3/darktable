@@ -23,6 +23,7 @@
 #include "develop/imageop_math.h"
 #include "gui/gtk.h"
 #include "iop/iop_api.h"
+#include "common/iop_group.h"
 
 #include <gtk/gtk.h>
 #include <stdlib.h>
@@ -50,6 +51,7 @@ typedef struct dt_iop_cacorrect_global_data_t
 {
 } dt_iop_cacorrect_global_data_t;
 
+
 // this returns a translatable name
 const char *name()
 {
@@ -59,7 +61,7 @@ const char *name()
 
 int groups()
 {
-  return IOP_GROUP_CORRECT;
+  return dt_iop_get_group("chromatic aberrations", IOP_GROUP_CORRECT);
 }
 
 int flags()
@@ -211,7 +213,7 @@ static gboolean LinEqSolve(int nDim, double *pfMatr, double *pfVect, double *pfS
   // pfMatr - matrix with coefficients
   // pfVect - vector with free members
   // pfSolution - vector with system solution
-  // pfMatr becames trianglular after function call
+  // pfMatr becomes triangular after function call
   // pfVect changes after function call
   //
   // Developer: Henry Guennadi Levkin
@@ -1289,11 +1291,22 @@ static void CA_correct(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *pie
             // some parameters for the bilinear interpolation
             shiftvfloor[c] = floor((float)lblockshifts[c >> 1][0]);
             shiftvceil[c] = ceil((float)lblockshifts[c >> 1][0]);
-            shiftvfrac[c] = lblockshifts[c >> 1][0] - shiftvfloor[c];
+            if (lblockshifts[c>>1][0] < 0.f) {
+              float tmp = shiftvfloor[c];
+              shiftvfloor[c] = shiftvceil[c];
+              shiftvceil[c] = tmp;
+            }
+            shiftvfrac[c] = fabsf(lblockshifts[c>>1][0] - shiftvfloor[c]);
 
             shifthfloor[c] = floor((float)lblockshifts[c >> 1][1]);
             shifthceil[c] = ceil((float)lblockshifts[c >> 1][1]);
-            shifthfrac[c] = lblockshifts[c >> 1][1] - shifthfloor[c];
+            if (lblockshifts[c>>1][1] < 0.f) {
+              float tmp = shifthfloor[c];
+              shifthfloor[c] = shifthceil[c];
+              shifthceil[c] = tmp;
+            }
+            shifthfrac[c] = fabsf(lblockshifts[c>>1][1] - shifthfloor[c]);
+
 
             GRBdir[0][c] = lblockshifts[c >> 1][0] > 0 ? 2 : -2;
             GRBdir[1][c] = lblockshifts[c >> 1][1] > 0 ? 2 : -2;
@@ -1493,8 +1506,9 @@ void reload_defaults(dt_iop_module_t *module)
   // we might be called from presets update infrastructure => there is no image
   if(!module->dev) goto end;
 
+  dt_image_t *img = &module->dev->image_storage;
   // can't be switched on for non-raw or x-trans images:
-  if(dt_image_is_raw(&module->dev->image_storage) && (module->dev->image_storage.buf_dsc.filters != 9u))
+  if(dt_image_is_raw(img) && (img->buf_dsc.filters != 9u) && !dt_image_is_monochrome(img))
     module->hide_enable_button = 0;
   else
     module->hide_enable_button = 1;
@@ -1517,7 +1531,7 @@ void init(dt_iop_module_t *module)
   module->default_enabled = 0;
 
   // we come just before demosaicing.
-  module->priority = 73; // module order created by iop_dependencies.py, do not edit!
+  module->priority = 71; // module order created by iop_dependencies.py, do not edit!
   module->params_size = sizeof(dt_iop_cacorrect_params_t);
   module->gui_data = NULL;
 }
@@ -1536,7 +1550,8 @@ void commit_params(struct dt_iop_module_t *self, dt_iop_params_t *params, dt_dev
 {
   // dt_iop_cacorrect_params_t *p = (dt_iop_cacorrect_params_t *)params;
   // dt_iop_cacorrect_data_t *d = (dt_iop_cacorrect_data_t *)piece->data;
-  if(!(pipe->image.flags & DT_IMAGE_RAW)) piece->enabled = 0;
+  dt_image_t *img = &pipe->image;
+  if(!(img->flags & DT_IMAGE_RAW) || dt_image_is_monochrome(img)) piece->enabled = 0;
 }
 
 void init_pipe(struct dt_iop_module_t *self, dt_dev_pixelpipe_t *pipe, dt_dev_pixelpipe_iop_t *piece)
@@ -1554,7 +1569,7 @@ void cleanup_pipe(struct dt_iop_module_t *self, dt_dev_pixelpipe_t *pipe, dt_dev
 void gui_update(dt_iop_module_t *self)
 {
   if(dt_image_is_raw(&self->dev->image_storage))
-    if(self->dev->image_storage.buf_dsc.filters != 9u)
+    if(self->dev->image_storage.buf_dsc.filters != 9u && !dt_image_is_monochrome(&self->dev->image_storage))
       gtk_label_set_text(GTK_LABEL(self->widget), _("automatic chromatic aberration correction"));
     else
       gtk_label_set_text(GTK_LABEL(self->widget),
@@ -1569,6 +1584,7 @@ void gui_init(dt_iop_module_t *self)
   self->gui_data = NULL;
   self->widget = gtk_label_new("");
   gtk_widget_set_halign(self->widget, GTK_ALIGN_START);
+  dt_gui_add_help_link(self->widget, dt_get_help_url(self->op));
 }
 
 void gui_cleanup(dt_iop_module_t *self)

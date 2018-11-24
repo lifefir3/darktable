@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.0)
+cmake_minimum_required(VERSION 3.1)
 
 cmake_policy(SET CMP0011 NEW)
 cmake_policy(SET CMP0025 NEW)
@@ -77,6 +77,9 @@ option(BUILD_RS_IDENTIFY "Build the darktable-rs-identify debug aid" ON)
 option(BUILD_SSE2_CODEPATHS "(EXPERIMENTAL OPTION, DO NOT DISABLE) Building SSE2-optimized codepaths" ON)
 option(VALIDATE_APPDATA_FILE "Use appstream-util (if found) to validate the .appdata file" OFF)
 option(BUILD_TESTS "Build tests in src/tests/, runnable from the build/ directory" OFF)
+option(BUILD_BATTERY_INDICATOR "Add an icon to the top toolbar showing the state of a laptop battery" OFF)
+option(BUILD_MSYS2_INSTALL "Build an MSYS2 version of the install, aka for Windows platform, but without dependency installs" OFF)
+option(BUILD_NOISE_TOOLS "Build tools for generating noise proifles" OFF)
 
 if(USE_OPENCL)
   option(TESTBUILD_OPENCL_PROGRAMS "Test-compile opencl programs (needs llvm and clang 3.9+)" ON)
@@ -167,6 +170,9 @@ if(WIN32)
   set(BUILD_CMSTEST OFF)
   set(BUILD_PRINT OFF)
   set(TESTBUILD_OPENCL_PROGRAMS OFF)
+  if(BUILD_MSYS2_INSTALL)
+    add_definitions(-DMSYS2_INSTALL)
+  endif()
 endif(WIN32)
 
 
@@ -279,13 +285,6 @@ else(APPLE)
     set(RPATH_DT "$ORIGIN")
 endif(APPLE)
 
-if(NOT WIN32)
-  # Windows doesn't know the concept of RPATHs :(
-  set(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
-  set(CMAKE_INSTALL_RPATH_USE_LINK_PATH FALSE)
-  set(CMAKE_INSTALL_RPATH ${RPATH_DT}/../${CMAKE_INSTALL_LIBDIR}/darktable)
-endif(NOT WIN32)
-
 # we need some external programs for building darktable
 message(STATUS "Looking for external programs")
 set(EXTERNAL_PROGRAMS_FOUND 1)
@@ -332,17 +331,23 @@ endif(VALIDATE_APPDATA_FILE)
 if(TESTBUILD_OPENCL_PROGRAMS)
   set(TESTBUILD_OPENCL_PROGRAMS OFF)
 
+  macro(find_llvm versions)
+    foreach(version ${versions})
+      find_package(LLVM ${version} CONFIG)
+      if(LLVM_FOUND)
+        break()
+      endif()
+    endforeach()
+  endmacro()
+
   # 3.9 is the first version with which this works.
-  find_package(LLVM 4.0 CONFIG)
-  if (NOT LLVM_FOUND)
-    find_package(LLVM 3.9 CONFIG)
-  endif()
+  find_llvm("7;6.0;5.0;4.0;3.9")
 
   if (LLVM_FOUND)
     message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
 
     find_program(CLANG_OPENCL_COMPILER
-      NAMES clang-${LLVM_VERSION_MAJOR}.${LLVM_VERSION_MINOR} clang-${LLVM_PACKAGE_VERSION} clang${LLVM_VERSION_MAJOR}${LLVM_VERSION_MINOR}
+      NAMES clang-${LLVM_VERSION_MAJOR}.${LLVM_VERSION_MINOR} clang-${LLVM_PACKAGE_VERSION} clang${LLVM_VERSION_MAJOR}${LLVM_VERSION_MINOR} clang-${LLVM_VERSION_MAJOR} clang${LLVM_VERSION_MAJOR}
     )
 
     if (NOT ${CLANG_OPENCL_COMPILER} STREQUAL "CLANG_OPENCL_COMPILER-NOTFOUND")
@@ -529,10 +534,11 @@ endif(NOT WIN32)
 set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME DTApplication)
 
 # lets continue into build directories
-include(data/supported_extensions.cmake) # this file needs to be included first as it gets ammended in src/
+include(data/supported_extensions.cmake) # this file needs to be included first as it gets amended in src/
 add_subdirectory(src) # src/ needs to be before data/ so that the correct CSS file gets installed
 add_subdirectory(data)
 add_subdirectory(doc)
+add_subdirectory(tools)
 
 # This contains fixup_bundle
 # And adding a separate subderectory as a last one will make sure

@@ -50,10 +50,10 @@ typedef enum dt_iop_group_t
 {
   IOP_GROUP_NONE = 0,
   IOP_GROUP_BASIC = 1 << 0,
-  IOP_GROUP_COLOR = 1 << 1,
-  IOP_GROUP_CORRECT = 1 << 2,
-  IOP_GROUP_EFFECT = 1 << 3,
-  IOP_GROUP_TONE = 1 << 4,
+  IOP_GROUP_TONE = 1 << 1,
+  IOP_GROUP_COLOR = 1 << 2,
+  IOP_GROUP_CORRECT = 1 << 3,
+  IOP_GROUP_EFFECT = 1 << 4,
   IOP_SPECIAL_GROUP_ACTIVE_PIPE = 1 << 5,
   IOP_SPECIAL_GROUP_USER_DEFINED = 1 << 6
 } dt_iop_group_t;
@@ -206,6 +206,8 @@ typedef struct dt_iop_module_so_t
                          struct dt_iop_roi_t *roi_out, const struct dt_iop_roi_t *roi_in);
   int (*legacy_params)(struct dt_iop_module_t *self, const void *const old_params, const int old_version,
                        void *new_params, const int new_version);
+  // allow to select a shape inside an iop
+  void (*masks_selection_changed)(struct dt_iop_module_t *self, const int form_selected_id);
 
   void (*process)(struct dt_iop_module_t *self, struct dt_dev_pixelpipe_iop_t *piece, const void *const i,
                   void *const o, const struct dt_iop_roi_t *const roi_in,
@@ -262,6 +264,9 @@ typedef struct dt_iop_module_t
   int request_mask_display;
   /** set to 1 if you want the blendif mask to be suppressed in the module in focus. gui mode only. */
   int32_t suppress_mask;
+  /** set to 1 if you want the blendif to be completely suppressed in the module in focus. only when the module has
+   * the focus. */
+  int32_t bypass_blendif;
   /** bounding box in which the mean color is requested. */
   float color_picker_box[4];
   /** single point to pick if in point mode */
@@ -398,6 +403,8 @@ typedef struct dt_iop_module_t
                          struct dt_iop_roi_t *roi_out, const struct dt_iop_roi_t *roi_in);
   int (*legacy_params)(struct dt_iop_module_t *self, const void *const old_params, const int old_version,
                        void *new_params, const int new_version);
+  // allow to select a shape inside an iop
+  void (*masks_selection_changed)(struct dt_iop_module_t *self, const int form_selected_id);
 
   /** this is the temp homebrew callback to operations.
     * x,y, and scale are just given for orientation in the framebuffer. i and o are
@@ -457,7 +464,10 @@ typedef struct dt_iop_module_t
 void dt_iop_load_modules_so();
 /** cleans up the dlopen refs. */
 void dt_iop_unload_modules_so();
+/** load a module for a given .so */
+int dt_iop_load_module_by_so(dt_iop_module_t *module, dt_iop_module_so_t *so, struct dt_develop_t *dev);
 /** returns a list of instances referencing stuff loaded in load_modules_so. */
+GList *dt_iop_load_modules_ext(struct dt_develop_t *dev, gboolean no_image);
 GList *dt_iop_load_modules(struct dt_develop_t *dev);
 int dt_iop_load_module(dt_iop_module_t *module, dt_iop_module_so_t *module_so, struct dt_develop_t *dev);
 gint sort_plugins(gconstpointer a, gconstpointer b);
@@ -484,6 +494,8 @@ void dt_iop_gui_update_expanded(dt_iop_module_t *module);
 /** change module state */
 void dt_iop_so_gui_set_state(dt_iop_module_so_t *module, dt_iop_module_state_t state);
 void dt_iop_gui_set_state(dt_iop_module_t *module, dt_iop_module_state_t state);
+/* duplicate module and return new instance */
+dt_iop_module_t *dt_iop_gui_duplicate(dt_iop_module_t *base, gboolean copy_params);
 
 void dt_iop_gui_update_header(dt_iop_module_t *module);
 

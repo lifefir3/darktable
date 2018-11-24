@@ -96,7 +96,7 @@ typedef enum FBAlbumPrivacyPolicy
 
 
 /**
- * Represents informations about an album
+ * Represents information about an album
  */
 typedef struct FBAlbum
 {
@@ -119,7 +119,7 @@ static void fb_album_destroy(FBAlbum *album)
 }
 
 /**
- * Represents informations about an account
+ * Represents information about an account
  */
 typedef struct FBAccountInfo
 {
@@ -552,7 +552,7 @@ static const gchar *fb_upload_photo_to_album(FBContext *ctx, gchar *albumid, gch
 
 /**
  * @see https://developers.facebook.com/docs/reference/api/user/
- * @return basic informations about the account
+ * @return basic information about the account
  */
 static FBAccountInfo *fb_get_account_info(FBContext *ctx)
 {
@@ -588,7 +588,7 @@ static gboolean combobox_separator(GtkTreeModel *model, GtkTreeIter *iter, gpoin
 
 /**
  * @see https://developers.facebook.com/docs/authentication/
- * @returs NULL if the user cancel the operation or a valid token
+ * @returns NULL if the user cancels the operation or a valid token
  */
 static gboolean _open_browser(const char *callback_url)
 {
@@ -747,17 +747,16 @@ static gboolean facebook_get_user_auth_token_from_server(dt_storage_facebook_gui
 
 static void load_account_info_fill(gchar *key, gchar *value, GSList **accountlist)
 {
-  FBAccountInfo *info = fb_account_info_init();
-  info->id = g_strdup(key);
-
   JsonParser *parser = json_parser_new();
   json_parser_load_from_data(parser, value, strlen(value), NULL);
   JsonNode *root = json_parser_get_root(parser);
-  JsonObject *obj = json_node_get_object(root);
 
   // root can be null while parsing the account info
   if(root)
   {
+    JsonObject *obj = json_node_get_object(root);
+    FBAccountInfo *info = fb_account_info_init();
+    info->id = g_strdup(key);
     info->token = g_strdup(json_object_get_string_member(obj, "token"));
     info->readablename = g_strdup(json_object_get_string_member(obj, "name"));
     *accountlist = g_slist_prepend(*accountlist, info);

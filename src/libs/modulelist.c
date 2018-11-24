@@ -81,6 +81,7 @@ void gui_init(dt_lib_module_t *self)
   self->widget = gtk_scrolled_window_new(
       NULL, NULL); // GTK_ADJUSTMENT(gtk_adjustment_new(200, 100, 200, 10, 100, 100))
   gtk_widget_set_size_request(self->widget, -1, DT_PIXEL_APPLY_DPI(208));
+  dt_gui_add_help_link(self->widget, dt_get_help_url(self->plugin_name));
   gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(self->widget), GTK_POLICY_AUTOMATIC, GTK_POLICY_ALWAYS);
   d->tree = GTK_TREE_VIEW(gtk_tree_view_new());
   gtk_widget_set_size_request(GTK_WIDGET(d->tree), DT_PIXEL_APPLY_DPI(50), -1);
@@ -196,7 +197,7 @@ static void _lib_modulelist_populate_callback(gpointer instance, gpointer user_d
   cairo_surface_t *fav_cst = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, ICON_SIZE, ICON_SIZE);
   cairo_t *fav_cr = cairo_create(fav_cst);
   cairo_set_source_rgb(fav_cr, 0.7, 0.7, 0.7);
-  dtgtk_cairo_paint_modulegroup_favorites(fav_cr, 0, 0, ICON_SIZE, ICON_SIZE, 0);
+  dtgtk_cairo_paint_modulegroup_favorites(fav_cr, 0, 0, ICON_SIZE, ICON_SIZE, 0, NULL);
   cairo_destroy(fav_cr);
   guchar *data = cairo_image_surface_get_data(fav_cst);
   dt_draw_cairo_to_gdk_pixbuf(data, ICON_SIZE, ICON_SIZE);
@@ -229,6 +230,8 @@ static void _lib_modulelist_populate_callback(gpointer instance, gpointer user_d
   if(col) gtk_tree_view_remove_column(GTK_TREE_VIEW(view), col);
   gtk_tree_view_insert_column_with_data_func(GTK_TREE_VIEW(view), 2, "name", text_renderer,
                                              text_renderer_function, NULL, NULL);
+
+  gtk_tree_view_set_search_column(GTK_TREE_VIEW(view), 2);
 
   /* go thru list of iop modules and add them to the list */
   GList *modules = g_list_last(darktable.iop);
@@ -314,9 +317,50 @@ static gint _lib_modulelist_gui_sort(GtkTreeModel *model, GtkTreeIter *a, GtkTre
   return g_utf8_collate(modulea->name(), moduleb->name());
 }
 
+static char *gen_params(char state, int *size)
+{
+  int len = 0;
+  char *params = NULL;
+  for(GList *iter = g_list_first(darktable.iop); iter; iter = g_list_next(iter))
+  {
+    dt_iop_module_so_t *module = (dt_iop_module_so_t *)iter->data;
+    // skip modules not in the list
+    if(dt_iop_so_is_hidden(module) || (module->flags() & IOP_FLAGS_DEPRECATED)) continue;
+    int op_len = strlen(module->op) + 1;
+    int new_len = len + 1 + op_len;
+    char *tmp = realloc(params, new_len);
+    if(!tmp)
+    {
+      free(params);
+      params = NULL;
+      len = 0;
+      break;
+    }
+    else
+    {
+      params = tmp;
+    }
+    memcpy(params + len, module->op, op_len);
+    params[new_len - 1] = state;
+    len = new_len;
+  }
+
+  *size = len;
+  return params;
+}
+
 void init_presets(dt_lib_module_t *self)
 {
-  // we could have a "show all" preset, or "show simple set" but I don't think we need that.
+  // add "none" and "all" presets
+  int len;
+  char *params_none = gen_params(0, &len);
+  char *params_all = gen_params(1, &len);
+
+  dt_lib_presets_add(_("show none"), self->plugin_name, self->version(), params_none, len);
+  dt_lib_presets_add(_("show all"), self->plugin_name, self->version(), params_all, len);
+
+  free(params_none);
+  free(params_all);
 }
 
 void *get_params(dt_lib_module_t *self, int *size)

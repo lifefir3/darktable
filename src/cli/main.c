@@ -86,7 +86,7 @@ int main(int argc, char *arg[])
       {
         printf("this is darktable-cli %s\ncopyright (c) 2012-%s johannes hanika, tobias ellinghaus\n",
                darktable_package_version, darktable_last_commit_year);
-        exit(1);
+        exit(0);
       }
       else if(!strcmp(arg[k], "--width") && argc > k + 1)
       {
@@ -255,7 +255,13 @@ int main(int argc, char *arg[])
     {
       int id = GPOINTER_TO_INT(iter->data);
       dt_image_t *image = dt_image_cache_get(darktable.image_cache, id, 'w');
-      dt_exif_xmp_read(image, xmp_filename, 1);
+      if(dt_exif_xmp_read(image, xmp_filename, 1) != 0)
+      {
+        fprintf(stderr, _("error: can't open xmp file %s"), xmp_filename);
+        fprintf(stderr, "\n");
+        free(m_arg);
+        exit(1);
+      }
       // don't write new xmp:
       dt_image_cache_write_release(darktable.image_cache, image, DT_IMAGE_CACHE_RELAXED);
     }
